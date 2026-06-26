@@ -124,6 +124,7 @@ Core fields:
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds
 - graceSec (number, optional): SIGTERM grace period in seconds
+- outputInactivityTimeoutMs (number | null, optional): adapter-level watchdog that kills the OpenCode child if it produces no parsed stdout events for this many milliseconds; default 7 minutes; set to null to disable
 
 Notes:
 - OpenCode supports multiple providers and models. Use \
