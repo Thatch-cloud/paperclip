@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseOpenCodeJsonl, isOpenCodeUnknownSessionError } from "./parse.js";
+import {
+  parseOpenCodeJsonl,
+  isOpenCodeUnknownSessionError,
+  isOpenCodeProviderExhaustionError,
+} from "./parse.js";
 
 describe("parseOpenCodeJsonl", () => {
   it("parses assistant text, usage, cost, and errors", () => {
@@ -73,5 +77,33 @@ describe("parseOpenCodeJsonl", () => {
     expect(isOpenCodeUnknownSessionError("Session not found: s_123", "")).toBe(true);
     expect(isOpenCodeUnknownSessionError("", "unknown session id")).toBe(true);
     expect(isOpenCodeUnknownSessionError("all good", "")).toBe(false);
+  });
+});
+
+describe("isOpenCodeProviderExhaustionError", () => {
+  it("matches the THA-396 usage-limit class and its provider synonyms", () => {
+    expect(isOpenCodeProviderExhaustionError("Usage limit for this billing period.")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("usage limit for this billing cycle reached")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("You exceeded your current quota.")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("insufficient credit balance")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("402 Payment Required")).toBe(true);
+  });
+
+  it("matches rate-limit, overload, and connection-failure triggers", () => {
+    expect(isOpenCodeProviderExhaustionError("429 Too Many Requests")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("rate-limit exceeded")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("overloaded")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("Error 529: The model is overloaded")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("fetch failed: ECONNREFUSED")).toBe(true);
+    expect(isOpenCodeProviderExhaustionError("connection timed out")).toBe(true);
+  });
+
+  it("does not match config/availability or ordinary errors", () => {
+    expect(isOpenCodeProviderExhaustionError(null)).toBe(false);
+    expect(isOpenCodeProviderExhaustionError("")).toBe(false);
+    expect(isOpenCodeProviderExhaustionError("model not found: foo/bar")).toBe(false);
+    expect(isOpenCodeProviderExhaustionError("model unavailable")).toBe(false);
+    expect(isOpenCodeProviderExhaustionError("unknown session id")).toBe(false);
+    expect(isOpenCodeProviderExhaustionError("syntax error near token")).toBe(false);
   });
 });

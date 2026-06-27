@@ -99,3 +99,44 @@ export function isOpenCodeUnknownSessionError(stdout: string, stderr: string): b
     haystack,
   );
 }
+
+// Cross-provider failover trigger set (THA-422). These are transient
+// provider-exhaustion / upstream-capacity conditions where re-trying the SAME
+// provider/model is unlikely to help, but a different already-authed provider
+// (configured via adapterConfig.fallbackModels) may be healthy. Each branch
+// matches a class of real provider wording rather than a single literal:
+//   1. Usage / billing-limit exhaustion — the THA-396 outage class. The AI SDK
+//      surfaces these as `AI_APICallError` with messages such as "Usage limit
+//      for this billing period". The spec anchor is
+//      `/usage limit for this (billing cycle|period)/i`; the surrounding
+//      patterns catch the common synonyms providers emit.
+//   2. Rate limiting (HTTP 429 family).
+//   3. Provider overload / capacity (HTTP 529 / 503).
+//   4. Connection failures reaching the provider (transient upstream).
+//
+// Intentionally NOT matched: "model not found" / "model unavailable" (a
+// configuration/availability error, not provider exhaustion) and generic
+// non-transient auth errors — those should surface as ordinary failures.
+const OPENCODE_PROVIDER_EXHAUSTION_PATTERNS: readonly RegExp[] = [
+  /usage limit for this (?:billing cycle|billing period)/i,
+  /(?:exceeded|exhausted|reached|hit)\b.{0,40}?\b(?:usage|rate|quota|token|request|limit|credit|balance)/i,
+  /quota (?:exceed|exhaust)/i,
+  /insufficient (?:credit|balance|funds)/i,
+  /\bpayment required\b|\b402\b/i,
+  /\b429\b|rate[\s-]?limit/i,
+  /\b529\b|\b503\b|overload(?:ed)?|service unavailable|provider capacity/i,
+  /\b(?:econnrefused|econnreset|etimedout|enotfound)\b|connection (?:refused|reset|timed out|failed)|fetch failed|network error/i,
+];
+
+export function isOpenCodeProviderExhaustionError(
+  errorMessage: string | null | undefined,
+): boolean {
+  if (!errorMessage) return false;
+  const haystack = `${errorMessage}`
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+  if (!haystack) return false;
+  return OPENCODE_PROVIDER_EXHAUSTION_PATTERNS.some((pattern) => pattern.test(haystack));
+}

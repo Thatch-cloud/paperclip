@@ -115,6 +115,7 @@ Core fields:
 - instructionsFilePath (string, optional): absolute path to a markdown instructions file prepended to the run prompt
 - model (string, required): OpenCode model id in provider/model format (for example anthropic/claude-sonnet-4-5)
 - variant (string, optional): provider-specific reasoning/profile variant passed as --variant (for example minimal|low|medium|high|xhigh|max)
+- fallbackModels (string[], optional): ordered list of OpenCode model ids used for cross-provider failover. If the primary \`model\` fails with a provider-exhaustion class error (usage/billing limit, rate-limit, overload/529, or connection failure), the adapter re-runs the attempt on each fallback model in order until one succeeds or the list is exhausted. Each entry must be a valid provider/model id for a provider that is already authed in opencode auth.json (no new credential is needed). The primary \`model\` is always tried first and is automatically de-duplicated from this list. The run is attributed to whichever model actually served it (provider/biller/model), so cross-billing metering reconciles automatically. Defaults to empty (failover disabled; behaves exactly as before).
 - dangerouslySkipPermissions (boolean, optional): inject a runtime OpenCode config that allows \`external_directory\` access without interactive prompts; defaults to true for unattended Paperclip runs
 - promptTemplate (string, optional): run prompt template
 - command (string, optional): defaults to "opencode"
@@ -138,4 +139,11 @@ Notes:
 - When \`dangerouslySkipPermissions\` is enabled, Paperclip injects a temporary \
   runtime config with \`permission.external_directory=allow\` so headless runs do \
   not stall on approval prompts.
+- Cross-provider failover (adapterConfig.fallbackModels): when the primary model \
+  returns a provider-exhaustion error, the adapter retries on each fallback \
+  provider/model in order, starting a fresh session each time, and forces the \
+  stored session to clear so the next heartbeat does not resume across \
+  providers. To add/rotate a fallback model, set an ordered provider/model list \
+  in the agent's adapterConfig.fallbackModels (each provider must already be \
+  authed via \`opencode auth\`). The run is attributed to the serving model.
 `;

@@ -44,7 +44,11 @@ import {
   readPaperclipIssueWorkModeFromContext,
   resolvePaperclipDesiredSkillNames,
 } from "@paperclipai/adapter-utils/server-utils";
-import { isOpenCodeUnknownSessionError, parseOpenCodeJsonl } from "./parse.js";
+import {
+  isOpenCodeProviderExhaustionError,
+  isOpenCodeUnknownSessionError,
+  parseOpenCodeJsonl,
+} from "./parse.js";
 import {
   ensureOpenCodeModelConfiguredAndAvailable,
   isTruthyEnvFlag,
@@ -53,7 +57,7 @@ import {
 } from "./models.js";
 import { removeMaintainerOnlySkillSymlinks } from "@paperclipai/adapter-utils/server-utils";
 import { prepareOpenCodeRuntimeConfig } from "./runtime-config.js";
-import { SANDBOX_INSTALL_COMMAND } from "../index.js";
+import { SANDBOX_INSTALL_COMMAND, isValidOpenCodeModelId } from "../index.js";
 import {
   createOpenCodeOutputInactivityMonitor,
   formatOutputInactivityMonitorErrorMessage,
@@ -104,6 +108,43 @@ function parseModelProvider(model: string | null): string | null {
 
 function resolveOpenCodeBiller(env: Record<string, string>, provider: string | null): string {
   return inferOpenAiCompatibleBiller(env, null) ?? provider ?? "unknown";
+}
+
+// Build the ordered list of fallback models for cross-provider failover (THA-422).
+// Reads adapterConfig.fallbackModels (string[]), drops anything that is not a
+// valid provider/model id, the primary `model` itself, and duplicates, while
+// preserving the configured order. Returning [] simply disables failover, so
+// the adapter behaves exactly as before when no fallback is configured.
+function resolveOpenCodeFallbackModels(fallbackConfig: unknown, primaryModel: string): string[] {
+  const raw = asStringArray(fallbackConfig);
+  const seen = new Set<string>();
+  const normalizedPrimary = primaryModel.trim();
+  if (normalizedPrimary) seen.add(normalizedPrimary);
+  const fallbacks: string[] = [];
+  for (const entry of raw) {
+    const model = entry.trim();
+    if (!model || seen.has(model)) continue;
+    if (!isValidOpenCodeModelId(model)) continue;
+    seen.add(model);
+    fallbacks.push(model);
+  }
+  return fallbacks;
+}
+
+// True when an attempt exited with a provider-exhaustion class error that
+// failover can address. Requires a non-timeout failure with either a parsed
+// error message or a non-zero exit that classifies as exhaustion. Modeled on
+// the existing `initialFailed`/missing-session predicate.
+function isAttemptProviderExhaustionFailure(attempt: {
+  proc: { exitCode: number | null; timedOut: boolean };
+  parsed: ReturnType<typeof parseOpenCodeJsonl>;
+}): boolean {
+  if (attempt.proc.timedOut) return false;
+  const parsedError = typeof attempt.parsed.errorMessage === "string" ? attempt.parsed.errorMessage.trim() : "";
+  if (parsedError) return isOpenCodeProviderExhaustionError(parsedError);
+  // Exit-code-only failure with no parsed error text cannot be reliably
+  // classified as provider exhaustion; do not trigger failover on it.
+  return false;
 }
 
 const REMOTE_OPENCODE_MODELS_PROBE_DEFAULT_TIMEOUT_SEC = 20;
@@ -610,18 +651,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const printLogs = isTruthyEnvFlag(
       env.PAPERCLIP_OPENCODE_PRINT_LOGS ?? process.env.PAPERCLIP_OPENCODE_PRINT_LOGS,
     );
-    const buildArgs = (resumeSessionId: string | null) => {
+    const buildArgs = (resumeSessionId: string | null, activeModel: string) => {
       const args = ["run", "--format", "json"];
       if (printLogs) args.push("--print-logs");
       if (resumeSessionId) args.push("--session", resumeSessionId);
-      if (model) args.push("--model", model);
+      if (activeModel) args.push("--model", activeModel);
       if (variant) args.push("--variant", variant);
       if (extraArgs.length > 0) args.push(...extraArgs);
       return args;
     };
 
-    const runAttempt = async (resumeSessionId: string | null) => {
-      const args = buildArgs(resumeSessionId);
+    const runAttempt = async (resumeSessionId: string | null, activeModel: string) => {
+      const args = buildArgs(resumeSessionId, activeModel);
       if (onMeta) {
         await onMeta({
           adapterType: "opencode_local",
@@ -736,6 +777,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           | { fired: false }
           | { fired: true; terminationSignal: NodeJS.Signals | null; elapsedMsSinceLastEvent: number; timeoutMs: number };
       },
+      activeModel: string,
       clearSessionOnMissingSession = false,
     ): AdapterExecutionResult => {
       if (attempt.monitor?.fired) {
@@ -751,9 +793,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           sessionId: null,
           sessionParams: null,
           sessionDisplayId: null,
-          provider: parseModelProvider(model || null),
-          biller: resolveOpenCodeBiller(runtimeEnv, parseModelProvider(model || null)),
-          model: model || null,
+          provider: parseModelProvider(activeModel || null),
+          biller: resolveOpenCodeBiller(runtimeEnv, parseModelProvider(activeModel || null)),
+          model: activeModel || null,
           billingType: "unknown",
           costUsd: attempt.parsed.costUsd,
           resultJson: {
@@ -806,7 +848,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         parsedError ||
         stderrLine ||
         `OpenCode exited with code ${synthesizedExitCode ?? -1}`;
-      const modelId = model || null;
+      const modelId = activeModel || null;
 
       return {
         exitCode: synthesizedExitCode,
@@ -835,8 +877,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       };
     };
 
+    // Ordered fallback models for cross-provider failover on provider-exhaustion
+    // (THA-422). Empty when not configured, so behaviour is unchanged from before.
+    const fallbackModels = resolveOpenCodeFallbackModels(config.fallbackModels, model);
+
     try {
-      const initial = await runAttempt(sessionId);
+      const initial = await runAttempt(sessionId, model);
       const initialFailed =
         !initial.proc.timedOut && ((initial.proc.exitCode ?? 0) !== 0 || Boolean(initial.parsed.errorMessage));
       if (
@@ -848,11 +894,57 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           "stdout",
           `[paperclip] OpenCode session "${sessionId}" is unavailable; retrying with a fresh session.\n`,
         );
-        const retry = await runAttempt(null);
-        return toResult(retry, true);
+        const retry = await runAttempt(null, model);
+        return toResult(retry, model, true);
       }
 
-      return toResult(initial);
+      // Cross-provider failover: when the primary model hit a provider-exhaustion
+      // class error (usage/rate/overload/connection) and an ordered fallback
+      // model list is configured, re-run on the next already-authed provider.
+      // Modeled on the missing-session retry above. Failover always starts a
+      // FRESH session (a different provider cannot resume the primary's session)
+      // and forces clearSession so the next heartbeat does not attempt a
+      // cross-provider resume. THA-386 attribution is automatic: toResult
+      // attributes provider/biller/model from the model that actually served.
+      if (initialFailed && isAttemptProviderExhaustionFailure(initial) && fallbackModels.length > 0) {
+        let failoverAttempt = initial;
+        let failoverModel = model;
+        for (const candidateModel of fallbackModels) {
+          await onLog(
+            "stdout",
+            `[paperclip] OpenCode model "${failoverModel}" hit a provider-exhaustion error; failing over to "${candidateModel}".\n`,
+          );
+          const candidate = await runAttempt(null, candidateModel);
+          failoverAttempt = candidate;
+          failoverModel = candidateModel;
+          const candidateFailed =
+            !candidate.proc.timedOut &&
+            ((candidate.proc.exitCode ?? 0) !== 0 || Boolean(candidate.parsed.errorMessage));
+          if (!candidateFailed) {
+            await onLog(
+              "stdout",
+              `[paperclip] OpenCode failover succeeded on "${candidateModel}".\n`,
+            );
+            break;
+          }
+          if (isAttemptProviderExhaustionFailure(candidate)) {
+            await onLog(
+              "stdout",
+              `[paperclip] OpenCode fallback "${candidateModel}" also hit a provider-exhaustion error; continuing to next fallback.\n`,
+            );
+            continue;
+          }
+          // Non-exhaustion failure on the fallback: stop failing over and surface it.
+          break;
+        }
+        const result = toResult(failoverAttempt, failoverModel, true);
+        // A fallback-provider session must not be resumed by the next heartbeat's
+        // primary --model, so always drop the stored session after a failover.
+        result.clearSession = true;
+        return result;
+      }
+
+      return toResult(initial, model);
     } finally {
       await Promise.all([
         paperclipBridge?.stop(),
