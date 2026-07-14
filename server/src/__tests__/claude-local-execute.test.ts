@@ -1183,6 +1183,117 @@ describe("claude execute", () => {
     }
   });
 
+  it("classifies a parsed 'prompt is too long' failure as context-overflow and clears the session", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-ctx-overflow-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "claude");
+    await fs.mkdir(workspace, { recursive: true });
+    await writeFailingClaudeCommand(commandPath, {
+      resultEvent: {
+        type: "result",
+        subtype: "error",
+        session_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        is_error: true,
+        result: "prompt is too long: 250000 tokens > 200000 maximum",
+        errors: [{ message: "prompt is too long: 250000 tokens > 200000 maximum" }],
+      },
+    });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const result = await execute({
+        runId: "run-claude-ctx-overflow",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          sessionParams: { sessionId: "ffffffff-ffff-4fff-8fff-ffffffffffff" },
+          sessionDisplayId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          promptTemplate: "Follow the paperclip heartbeat.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.errorCode).toBe("claude_context_overflow");
+      expect(result.errorFamily).toBe("context_overflow");
+      // Defense-in-depth for THA-466: the wedged session must be dropped so the
+      // next run rotates to a fresh session instead of re-burning quota.
+      expect(result.clearSession).toBe(true);
+      expect(result.resultJson?.errorFamily).toBe("context_overflow");
+      expect(result.resultJson?.stopReason).toBe("context_overflow");
+      // Must NOT be double-classified as transient (no retry-not-before hint).
+      expect(result.retryNotBefore ?? null).toBeNull();
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies an unparsed stderr 'prompt is too long' failure as context-overflow", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-ctx-overflow-stderr-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "claude");
+    await fs.mkdir(workspace, { recursive: true });
+    await writeTextFailingClaudeCommand(commandPath, {
+      stderr: "Error: prompt is too long: 300000 tokens > 200000 maximum",
+      exitCode: 1,
+    });
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    try {
+      const result = await execute({
+        runId: "run-claude-ctx-overflow-stderr",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Claude Coder",
+          adapterType: "claude_local",
+          adapterConfig: {},
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          promptTemplate: "Follow the paperclip heartbeat.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async () => {},
+      });
+
+      expect(result.errorCode).toBe("claude_context_overflow");
+      expect(result.errorFamily).toBe("context_overflow");
+      expect(result.clearSession).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("auto-rotates session on previous_message_id 400 (synthetic-msg poisoning) and succeeds on retry", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-poisoned-msgid-"));
     const { workspace, commandPath, capturePath, statePath, restore } = await setupExecuteEnv(root, {

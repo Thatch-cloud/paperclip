@@ -64,7 +64,7 @@ export interface AdapterRuntimeServiceReport {
   healthStatus?: "unknown" | "healthy" | "unhealthy";
 }
 
-export type AdapterExecutionErrorFamily = "transient_upstream";
+export type AdapterExecutionErrorFamily = "transient_upstream" | "context_overflow";
 
 export interface AdapterExecutionResult {
   exitCode: number | null;

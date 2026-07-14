@@ -20,6 +20,8 @@ import {
 } from "./helpers/embedded-postgres.js";
 import {
   BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS,
+  CONTEXT_OVERFLOW_RETRY_REASON,
+  CONTEXT_OVERFLOW_WAKE_REASON,
   MAX_TURN_CONTINUATION_RETRY_REASON,
   MAX_TURN_CONTINUATION_WAKE_REASON,
   heartbeatService,
@@ -68,7 +70,7 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     agentId: string;
     now: Date;
     errorCode: string;
-    errorFamily?: "transient_upstream" | null;
+    errorFamily?: "transient_upstream" | "context_overflow" | null;
     retryNotBefore?: string | null;
     scheduledRetryAttempt?: number;
     resultJson?: Record<string, unknown> | null;
@@ -1444,5 +1446,99 @@ describeEmbeddedPostgres("heartbeat bounded retry scheduling", () => {
     expect((wakeupRequest?.payload as Record<string, unknown> | null)?.transientRetryNotBefore).toBe(
       retryNotBefore.toISOString(),
     );
+  });
+
+  it("schedules exactly one fresh-session rotation retry for a context-overflow failure (THA-1074)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 6, 14, 2, 30, 0);
+
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "claude_context_overflow",
+      errorFamily: "context_overflow",
+      adapterType: "claude_local",
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, {
+      now,
+      random: () => 0.5,
+      retryReason: CONTEXT_OVERFLOW_RETRY_REASON,
+      wakeReason: CONTEXT_OVERFLOW_WAKE_REASON,
+      maxAttempts: 1,
+      delayMs: 5_000,
+    });
+
+    expect(scheduled.outcome).toBe("scheduled");
+    if (scheduled.outcome !== "scheduled") return;
+    expect(scheduled.attempt).toBe(1);
+    expect(scheduled.maxAttempts).toBe(1);
+    expect(scheduled.dueAt.getTime()).toBe(now.getTime() + 5_000);
+
+    const retryRun = await db
+      .select({
+        scheduledRetryReason: heartbeatRuns.scheduledRetryReason,
+        scheduledRetryAttempt: heartbeatRuns.scheduledRetryAttempt,
+        scheduledRetryAt: heartbeatRuns.scheduledRetryAt,
+        status: heartbeatRuns.status,
+        contextSnapshot: heartbeatRuns.contextSnapshot,
+      })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, scheduled.run.id))
+      .then((rows) => rows[0] ?? null);
+
+    expect(retryRun?.status).toBe("scheduled_retry");
+    expect(retryRun?.scheduledRetryReason).toBe(CONTEXT_OVERFLOW_RETRY_REASON);
+    expect(retryRun?.scheduledRetryAttempt).toBe(1);
+    const ctx = (retryRun?.contextSnapshot as Record<string, unknown> | null) ?? {};
+    expect(ctx.retryReason).toBe(CONTEXT_OVERFLOW_RETRY_REASON);
+    // Context-overflow recovery never carries a transient retry-not-before hint.
+    expect(ctx.transientRetryNotBefore ?? null).toBeNull();
+  });
+
+  it("does not schedule a second rotation retry once the context-overflow cap is reached (THA-1074)", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date(2026, 6, 14, 2, 35, 0);
+
+    // This run is the already-rotated retry (attempt 1 consumed); a second
+    // overflow on the fresh session means the prompt itself is too large.
+    await seedRetryFixture({
+      runId,
+      companyId,
+      agentId,
+      now,
+      errorCode: "claude_context_overflow",
+      errorFamily: "context_overflow",
+      adapterType: "claude_local",
+      scheduledRetryAttempt: 1,
+    });
+
+    const scheduled = await heartbeat.scheduleBoundedRetry(runId, {
+      now,
+      random: () => 0.5,
+      retryReason: CONTEXT_OVERFLOW_RETRY_REASON,
+      wakeReason: CONTEXT_OVERFLOW_WAKE_REASON,
+      maxAttempts: 1,
+      delayMs: 5_000,
+    });
+
+    expect(scheduled.outcome).toBe("retry_exhausted");
+    if (scheduled.outcome !== "retry_exhausted") return;
+    expect(scheduled.attempt).toBe(2);
+    expect(scheduled.maxAttempts).toBe(1);
+
+    // No new scheduled_retry run was created for this source run.
+    const retried = await db
+      .select({ id: heartbeatRuns.id })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.retryOfRunId, runId))
+      .then((rows) => rows);
+    expect(retried).toHaveLength(0);
   });
 });

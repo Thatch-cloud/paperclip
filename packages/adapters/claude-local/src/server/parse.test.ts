@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractClaudeRetryNotBefore,
+  isClaudeContextOverflowError,
   isClaudeTransientUpstreamError,
   isClaudePoisonedPreviousMessageIdError,
   isClaudeUnknownSessionError,
@@ -253,5 +254,46 @@ describe("extractClaudeRetryNotBefore", () => {
     expect(
       extractClaudeRetryNotBefore({ errorMessage: "Overloaded. Try again later." }, new Date()),
     ).toBeNull();
+  });
+});
+
+describe("isClaudeContextOverflowError", () => {
+  it("detects the Anthropic 'prompt is too long: N tokens > M maximum' wording", () => {
+    expect(
+      isClaudeContextOverflowError({
+        errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
+      }),
+    ).toBe(true);
+  });
+
+  it("detects context_length_exceeded carried in parsed error messages", () => {
+    expect(
+      isClaudeContextOverflowError({
+        parsed: {
+          is_error: true,
+          errors: [{ message: "context_length_exceeded: reduce the length of the messages" }],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for empty input and for unrelated failures", () => {
+    expect(isClaudeContextOverflowError({})).toBe(false);
+    expect(isClaudeContextOverflowError({ errorMessage: "Some other failure" })).toBe(false);
+  });
+});
+
+describe("isClaudeTransientUpstreamError (context-overflow exclusion)", () => {
+  it("does not classify a context-overflow failure as transient", () => {
+    expect(
+      isClaudeTransientUpstreamError({
+        errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
+      }),
+    ).toBe(false);
+    expect(
+      isClaudeTransientUpstreamError({
+        stderr: "Error: context_length_exceeded",
+      }),
+    ).toBe(false);
   });
 });
