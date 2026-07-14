@@ -88,6 +88,20 @@ export function parseOpenCodeJsonl(stdout: string) {
   };
 }
 
+export function hasOpenCodeCompletedTurn(stdout: string): boolean {
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const event = parseJson(line);
+    if (!event) continue;
+
+    if (asString(event.type, "") === "step_finish") return true;
+  }
+
+  return false;
+}
+
 export function isOpenCodeUnknownSessionError(stdout: string, stderr: string): boolean {
   const haystack = `${stdout}\n${stderr}`
     .split(/\r?\n/)
