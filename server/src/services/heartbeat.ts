@@ -273,6 +273,14 @@ const MAX_TURN_CONTINUATION_MAX_ATTEMPTS_CAP = 10;
 const MAX_TURN_CONTINUATION_DEFAULT_DELAY_MS = 1_000;
 const MAX_TURN_CONTINUATION_MAX_DELAY_MS = 5 * 60 * 1000;
 const MAX_TURN_CONTINUATION_LIVE_RUN_STATUSES = ["scheduled_retry", "queued", "running"] as const;
+// Context-overflow (THA-1074): a "prompt is too long" failure is deterministic
+// at the current session size. The adapter clears the persisted session, then we
+// schedule exactly one rotation retry on a fresh session. A second overflow on
+// the fresh session means the prompt itself is genuinely too large, so we stop.
+export const CONTEXT_OVERFLOW_RETRY_REASON = "context_overflow_rotation";
+export const CONTEXT_OVERFLOW_WAKE_REASON = "context_overflow_rotation_retry";
+const CONTEXT_OVERFLOW_RETRY_MAX_ATTEMPTS = 1;
+const CONTEXT_OVERFLOW_RETRY_DELAY_MS = 5_000;
 type CodexTransientFallbackMode =
   | "same_session"
   | "safer_invocation"
@@ -313,6 +321,9 @@ function readHeartbeatRunErrorFamily(
   if (run.errorCode === "codex_transient_upstream" || run.errorCode === "claude_transient_upstream") {
     return "transient_upstream";
   }
+  if (run.errorCode === "claude_context_overflow") {
+    return "context_overflow";
+  }
   return null;
 }
 
@@ -345,6 +356,21 @@ function readTransientRecoveryContractFromRun(
         retryNotBefore: readTransientRetryNotBeforeFromRun(run),
       }
     : null;
+}
+
+function readContextOverflowRecoveryContractFromRun(
+  run: Pick<typeof heartbeatRuns.$inferSelect, "errorCode" | "resultJson">,
+) {
+  const family = readHeartbeatRunErrorFamily(run);
+  if (family === "context_overflow") {
+    return { errorFamily: "context_overflow" as const };
+  }
+  // Backstop for runs persisted before the errorFamily was written: recognise
+  // the adapter errorCode directly.
+  if (run.errorCode === "claude_context_overflow") {
+    return { errorFamily: "context_overflow" as const };
+  }
+  return null;
 }
 
 function mergeAdapterRecoveryMetadata(input: {
@@ -9282,6 +9308,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           }
         } else if (outcome === "failed" && readTransientRecoveryContractFromRun(livenessRun)) {
           await scheduleBoundedRetryForRun(livenessRun, agent);
+        } else if (outcome === "failed" && readContextOverflowRecoveryContractFromRun(livenessRun)) {
+          // THA-1074: rotate to a fresh session (the adapter already cleared the
+          // persisted task session) and retry exactly once. If the fresh session
+          // also overflows, the prompt itself is too large — stop, don't storm.
+          await scheduleBoundedRetryForRun(livenessRun, agent, {
+            retryReason: CONTEXT_OVERFLOW_RETRY_REASON,
+            wakeReason: CONTEXT_OVERFLOW_WAKE_REASON,
+            maxAttempts: CONTEXT_OVERFLOW_RETRY_MAX_ATTEMPTS,
+            delayMs: CONTEXT_OVERFLOW_RETRY_DELAY_MS,
+          });
         }
         const issueCommentPolicyResult = await finalizeIssueCommentPolicy(livenessRun, agent);
         await releaseIssueExecutionAndPromote(livenessRun);
