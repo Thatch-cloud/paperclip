@@ -8,6 +8,8 @@ on:
 # pull_request_target gives access to secrets for untrusted fork PRs.
 
 permissions:
+  # PR comments are issue comments in GitHub's API; the quality gate upserts one.
+  issues: write
   pull-requests: write
   security-events: write
   checks: write
