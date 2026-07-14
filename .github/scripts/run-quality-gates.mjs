@@ -18,6 +18,11 @@ import { checkLockfile } from './check-pr-lockfile.mjs';
 import { checkDependencies } from './check-pr-dependencies.mjs';
 
 const COMMENT_SIGNATURE = '— commitperclip';
+const COMMENT_AUTHOR_LOGINS = new Set([
+  'commitperclip[bot]',
+  'commitperclip',
+  'github-actions[bot]',
+]);
 
 function buildComment(author, failures, informational) {
   if (failures.length === 0 && informational.length === 0) {
@@ -55,8 +60,7 @@ export async function findExistingComment(fetchFromGitHub, token, repo, prNumber
     );
 
     const existing = comments.find(
-      c => (c.user.login === 'commitperclip[bot]' || c.user.login === 'commitperclip') &&
-           c.body.includes(COMMENT_SIGNATURE)
+      c => COMMENT_AUTHOR_LOGINS.has(c.user.login) && c.body.includes(COMMENT_SIGNATURE)
     );
     if (existing) return existing;
 

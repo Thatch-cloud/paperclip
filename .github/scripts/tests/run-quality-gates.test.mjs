@@ -41,3 +41,15 @@ test('findExistingComment: returns null when no signed comment exists', async ()
 
   assert.equal(comment, null);
 });
+
+test('findExistingComment: finds signed github-actions comments for fork-owned token mode', async () => {
+  const comment = await findExistingComment(async () => ([
+    {
+      id: 2,
+      user: { login: 'github-actions[bot]' },
+      body: 'Looks good.\n\n— commitperclip',
+    },
+  ]), 'token', 'Thatch-cloud/paperclip', 6);
+
+  assert.equal(comment.id, 2);
+});
