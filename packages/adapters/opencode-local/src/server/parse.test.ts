@@ -3,6 +3,7 @@ import {
   parseOpenCodeJsonl,
   isOpenCodeUnknownSessionError,
   isOpenCodeProviderExhaustionError,
+  hasOpenCodeCompletedTurn,
 } from "./parse.js";
 
 describe("parseOpenCodeJsonl", () => {
@@ -105,5 +106,37 @@ describe("isOpenCodeProviderExhaustionError", () => {
     expect(isOpenCodeProviderExhaustionError("model unavailable")).toBe(false);
     expect(isOpenCodeProviderExhaustionError("unknown session id")).toBe(false);
     expect(isOpenCodeProviderExhaustionError("syntax error near token")).toBe(false);
+  });
+});
+
+describe("hasOpenCodeCompletedTurn", () => {
+  it("returns true when a step_finish event is present", () => {
+    const stdout = [
+      JSON.stringify({ type: "text", sessionID: "s1", part: { text: "done" } }),
+      JSON.stringify({ type: "step_finish", sessionID: "s1", part: { cost: 0.001, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } } }),
+    ].join("\n");
+    expect(hasOpenCodeCompletedTurn(stdout)).toBe(true);
+  });
+
+  it("returns false when no step_finish event is present", () => {
+    const stdout = [
+      JSON.stringify({ type: "text", sessionID: "s1", part: { text: "working..." } }),
+    ].join("\n");
+    expect(hasOpenCodeCompletedTurn(stdout)).toBe(false);
+  });
+
+  it("returns false on empty or non-JSON output", () => {
+    expect(hasOpenCodeCompletedTurn("")).toBe(false);
+    expect(hasOpenCodeCompletedTurn("not json\nalso not json")).toBe(false);
+  });
+
+  it("ignores invalid JSON lines but still detects step_finish", () => {
+    const stdout = [
+      "garbage line",
+      JSON.stringify({ type: "text", sessionID: "s1", part: { text: "hello" } }),
+      "",
+      JSON.stringify({ type: "step_finish", sessionID: "s1", part: {} }),
+    ].join("\n");
+    expect(hasOpenCodeCompletedTurn(stdout)).toBe(true);
   });
 });

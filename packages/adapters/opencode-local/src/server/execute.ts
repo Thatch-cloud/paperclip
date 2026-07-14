@@ -45,6 +45,7 @@ import {
   resolvePaperclipDesiredSkillNames,
 } from "@paperclipai/adapter-utils/server-utils";
 import {
+  hasOpenCodeCompletedTurn,
   isOpenCodeProviderExhaustionError,
   isOpenCodeUnknownSessionError,
   parseOpenCodeJsonl,
@@ -781,36 +782,42 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       clearSessionOnMissingSession = false,
     ): AdapterExecutionResult => {
       if (attempt.monitor?.fired) {
-        const errorMessage = formatOutputInactivityMonitorErrorMessage(attempt.monitor.elapsedMsSinceLastEvent);
-        return {
-          exitCode: null,
-          signal: attempt.monitor.terminationSignal ?? attempt.proc.signal,
-          timedOut: false,
-          errorMessage,
-          errorCode: "opencode_output_inactivity_monitor",
-          errorFamily: null,
-          usage: attempt.parsed.usage,
-          sessionId: null,
-          sessionParams: null,
-          sessionDisplayId: null,
-          provider: parseModelProvider(activeModel || null),
-          biller: resolveOpenCodeBiller(runtimeEnv, parseModelProvider(activeModel || null)),
-          model: activeModel || null,
-          billingType: "unknown",
-          costUsd: attempt.parsed.costUsd,
-          resultJson: {
-            stdout: attempt.proc.stdout,
-            stderr: attempt.proc.stderr,
-            outputInactivityMonitor: {
-              kind: "output_inactivity",
-              timeoutMs: attempt.monitor.timeoutMs,
-              elapsedMsSinceLastEvent: attempt.monitor.elapsedMsSinceLastEvent,
-              terminationSignal: attempt.monitor.terminationSignal,
+        // If the assistant turn completed (step_finish seen) before the monitor
+        // reaped the lingering child, do NOT surface a failure — the work is
+        // done, only the process failed to exit on its own. Fall through to the
+        // normal result path, which synthesizes a successful result.
+        if (!hasOpenCodeCompletedTurn(attempt.proc.stdout)) {
+          const errorMessage = formatOutputInactivityMonitorErrorMessage(attempt.monitor.elapsedMsSinceLastEvent);
+          return {
+            exitCode: null,
+            signal: attempt.monitor.terminationSignal ?? attempt.proc.signal,
+            timedOut: false,
+            errorMessage,
+            errorCode: "opencode_output_inactivity_monitor",
+            errorFamily: null,
+            usage: attempt.parsed.usage,
+            sessionId: null,
+            sessionParams: null,
+            sessionDisplayId: null,
+            provider: parseModelProvider(activeModel || null),
+            biller: resolveOpenCodeBiller(runtimeEnv, parseModelProvider(activeModel || null)),
+            model: activeModel || null,
+            billingType: "unknown",
+            costUsd: attempt.parsed.costUsd,
+            resultJson: {
+              stdout: attempt.proc.stdout,
+              stderr: attempt.proc.stderr,
+              outputInactivityMonitor: {
+                kind: "output_inactivity",
+                timeoutMs: attempt.monitor.timeoutMs,
+                elapsedMsSinceLastEvent: attempt.monitor.elapsedMsSinceLastEvent,
+                terminationSignal: attempt.monitor.terminationSignal,
+              },
             },
-          },
-          summary: attempt.parsed.summary,
-          clearSession: clearSessionOnMissingSession,
-        };
+            summary: attempt.parsed.summary,
+            clearSession: clearSessionOnMissingSession,
+          };
+        }
       }
       if (attempt.proc.timedOut) {
         return {
@@ -842,7 +849,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
       const parsedError = typeof attempt.parsed.errorMessage === "string" ? attempt.parsed.errorMessage.trim() : "";
       const stderrLine = firstNonEmptyLine(attempt.proc.stderr);
-      const rawExitCode = attempt.proc.exitCode;
+      // When the output-inactivity monitor reaped a child whose turn already
+      // completed (step_finish seen), the process exits with signal=SIGTERM and
+      // exitCode=null. Synthesize exit 0 so the completed work is not converted
+      // into a failed run.
+      const completedTurnReaped =
+        attempt.proc.exitCode === null &&
+        attempt.proc.signal === "SIGTERM" &&
+        hasOpenCodeCompletedTurn(attempt.proc.stdout);
+      const rawExitCode = completedTurnReaped ? 0 : attempt.proc.exitCode;
       const synthesizedExitCode = parsedError && (rawExitCode ?? 0) === 0 ? 1 : rawExitCode;
       const fallbackErrorMessage =
         parsedError ||
@@ -871,6 +886,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         resultJson: {
           stdout: attempt.proc.stdout,
           stderr: attempt.proc.stderr,
+          ...(attempt.monitor?.fired
+            ? {
+                outputInactivityMonitor: {
+                  kind: "output_inactivity_completed_turn_reaped",
+                  timeoutMs: attempt.monitor.timeoutMs,
+                  elapsedMsSinceLastEvent: attempt.monitor.elapsedMsSinceLastEvent,
+                  terminationSignal: attempt.monitor.terminationSignal,
+                },
+              }
+            : {}),
         },
         summary: attempt.parsed.summary,
         clearSession: Boolean(clearSessionOnMissingSession && !attempt.parsed.sessionId),
