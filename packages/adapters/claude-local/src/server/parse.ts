@@ -1,4 +1,5 @@
 import type { UsageSummary } from "@paperclipai/adapter-utils";
+import { isContextOverflowError } from "@paperclipai/adapter-utils";
 import {
   asString,
   asNumber,
@@ -402,6 +403,12 @@ export function isClaudeTransientUpstreamError(input: {
   if (parsed && (isClaudeMaxTurnsResult(parsed) || isClaudeUnknownSessionError(parsed) || isClaudePoisonedPreviousMessageIdError(parsed) || isClaudeImageProcessingError(parsed))) {
     return false;
   }
+  // Context overflow is deterministic at the current session size and has its
+  // own recovery path (rotate-then-retry). It must NOT be treated as transient,
+  // otherwise the same oversized session would be retried indefinitely.
+  if (isClaudeContextOverflowError(input)) {
+    return false;
+  }
   const loginMeta = detectClaudeLoginRequired({
     parsed,
     stdout: input.stdout ?? "",
@@ -412,4 +419,20 @@ export function isClaudeTransientUpstreamError(input: {
   const haystack = buildClaudeTransientHaystack(input);
   if (!haystack) return false;
   return CLAUDE_TRANSIENT_UPSTREAM_RE.test(haystack);
+}
+
+export function isClaudeContextOverflowError(input: {
+  parsed?: Record<string, unknown> | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  errorMessage?: string | null;
+}): boolean {
+  const parsed = input.parsed ?? null;
+  const parsedErrors = parsed ? extractClaudeErrorMessages(parsed) : [];
+  return isContextOverflowError({
+    errorMessage: input.errorMessage,
+    stdout: input.stdout,
+    stderr: input.stderr,
+    parsedErrorMessages: parsedErrors,
+  });
 }

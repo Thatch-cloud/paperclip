@@ -51,6 +51,7 @@ import {
   describeClaudeFailure,
   detectClaudeLoginRequired,
   extractClaudeRetryNotBefore,
+  isClaudeContextOverflowError,
   isClaudeMaxTurnsResult,
   isClaudeTransientUpstreamError,
   isClaudeUnknownSessionError,
@@ -815,7 +816,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     if (!parsed) {
       const fallbackErrorMessage = parseFallbackErrorMessage(proc);
+      const contextOverflow =
+        !loginMeta.requiresLogin &&
+        (proc.exitCode ?? 0) !== 0 &&
+        isClaudeContextOverflowError({
+          parsed: null,
+          stdout: proc.stdout,
+          stderr: proc.stderr,
+          errorMessage: fallbackErrorMessage,
+        });
       const transientUpstream =
+        !contextOverflow &&
         !loginMeta.requiresLogin &&
         (proc.exitCode ?? 0) !== 0 &&
         isClaudeTransientUpstreamError({
@@ -834,6 +845,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         : null;
       const errorCode = loginMeta.requiresLogin
         ? "claude_auth_required"
+        : contextOverflow
+        ? "claude_context_overflow"
         : transientUpstream
         ? "claude_transient_upstream"
         : null;
@@ -843,12 +856,19 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         timedOut: false,
         errorMessage: fallbackErrorMessage,
         errorCode,
-        errorFamily: transientUpstream ? "transient_upstream" : null,
+        errorFamily: contextOverflow
+          ? "context_overflow"
+          : transientUpstream
+          ? "transient_upstream"
+          : null,
         retryNotBefore: transientRetryNotBefore ? transientRetryNotBefore.toISOString() : null,
         errorMeta,
         resultJson: {
           stdout: proc.stdout,
           stderr: proc.stderr,
+          ...(contextOverflow
+            ? { errorFamily: "context_overflow", stopReason: "context_overflow" }
+            : {}),
           ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
           ...(transientRetryNotBefore
             ? { retryNotBefore: transientRetryNotBefore.toISOString() }
@@ -857,7 +877,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() }
             : {}),
         },
-        clearSession: Boolean(opts.clearSessionOnMissingSession),
+        // Context overflow is deterministic at this session size: clear the
+        // persisted session so the next run (retry or wake) starts fresh.
+        clearSession: contextOverflow || Boolean(opts.clearSessionOnMissingSession),
       };
     }
 
@@ -906,8 +928,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const errorMessage = failed
       ? describeClaudeFailure(parsed) ?? `Claude exited with code ${proc.exitCode ?? -1}`
       : null;
+    const contextOverflow =
+      failed &&
+      !loginMeta.requiresLogin &&
+      !clearSessionForMaxTurns &&
+      !poisonedPreviousMessageId &&
+      isClaudeContextOverflowError({
+        parsed,
+        stdout: proc.stdout,
+        stderr: proc.stderr,
+        errorMessage,
+      });
     const transientUpstream =
       failed &&
+      !contextOverflow &&
       !loginMeta.requiresLogin &&
       !clearSessionForMaxTurns &&
       !poisonedPreviousMessageId &&
@@ -931,6 +965,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? "max_turns_exhausted"
       : failed && poisonedPreviousMessageId
       ? "claude_poisoned_previous_message_id"
+      : contextOverflow
+      ? "claude_context_overflow"
       : transientUpstream
       ? "claude_transient_upstream"
       : null;
@@ -938,6 +974,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ...parsed,
       ...(failed && clearSessionForMaxTurns ? { stopReason: "max_turns_exhausted" } : {}),
       ...(failed && poisonedPreviousMessageId ? { stopReason: "claude_poisoned_previous_message_id" } : {}),
+      ...(contextOverflow ? { errorFamily: "context_overflow", stopReason: "context_overflow" } : {}),
       ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
       ...(transientRetryNotBefore ? { retryNotBefore: transientRetryNotBefore.toISOString() } : {}),
       ...(transientRetryNotBefore ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
@@ -949,7 +986,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       timedOut: false,
       errorMessage,
       errorCode: resolvedErrorCode,
-      errorFamily: transientUpstream ? "transient_upstream" : null,
+      errorFamily: contextOverflow
+        ? "context_overflow"
+        : transientUpstream
+        ? "transient_upstream"
+        : null,
       retryNotBefore: transientRetryNotBefore ? transientRetryNotBefore.toISOString() : null,
       errorMeta,
       usage,
@@ -969,6 +1010,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         // state error. Force the server to drop persisted session state for
         // this issue so the next continuation starts from a clean slate.
         poisonedPreviousMessageId ||
+        // Context overflow is deterministic at this session size; rotating to
+        // a fresh session is the only way to recover. See THA-1074.
+        contextOverflow ||
         Boolean(opts.clearSessionOnMissingSession && !resolvedSessionId),
     };
   };
