@@ -42,6 +42,32 @@ process.exit(${exit});
   await fs.chmod(commandPath, 0o755);
 }
 
+async function writeSuccessWithAuthWarningClaudeCommand(commandPath: string): Promise<void> {
+  const script = `#!/usr/bin/env node
+console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "55555555-5555-4555-8555-555555555555", model: "claude-sonnet" }));
+console.log(JSON.stringify({ type: "assistant", session_id: "55555555-5555-4555-8555-555555555555", message: { content: [{ type: "text", text: "done" }] } }));
+console.log(JSON.stringify({ type: "result", subtype: "success", session_id: "55555555-5555-4555-8555-555555555555", is_error: false, result: "done", usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 } }));
+process.stderr.write('Please log in first.\\n');
+`;
+  await fs.writeFile(commandPath, script, "utf8");
+  await fs.chmod(commandPath, 0o755);
+}
+
+async function writeAuthFailureClaudeCommand(commandPath: string): Promise<void> {
+  const script = `#!/usr/bin/env node
+console.log(JSON.stringify({
+  type: "result",
+  subtype: "error",
+  session_id: "66666666-6666-4666-8666-666666666666",
+  is_error: true,
+  result: "Please log in first.",
+}));
+process.exit(1);
+`;
+  await fs.writeFile(commandPath, script, "utf8");
+  await fs.chmod(commandPath, 0o755);
+}
+
 async function writeFakeClaudeCommand(commandPath: string): Promise<void> {
   const script = `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -345,6 +371,74 @@ function createLocalSandboxRunner() {
 }
 
 describe("claude execute", () => {
+  it("keeps a successful result successful when stderr contains a post-exit auth warning", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-success-auth-warning-"));
+    const { workspace, commandPath, restore } = await setupExecuteEnv(root, {
+      commandWriter: writeSuccessWithAuthWarningClaudeCommand,
+    });
+
+    try {
+      const result = await execute({
+        runId: "run-success-auth-warning",
+        agent: { id: "agent-1", companyId: "co-1", name: "Test", adapterType: "claude_local", adapterConfig: {} },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          promptTemplate: "Do work.",
+        },
+        context: {},
+        authToken: "tok",
+        onLog: async () => {},
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.errorCode).toBeNull();
+      expect(result.errorMessage).toBeNull();
+      expect(result.summary).toBe("done");
+      expect(result.resultJson).toMatchObject({
+        subtype: "success",
+        authHealth: {
+          code: "claude_auth_required",
+          level: "warn",
+        },
+      });
+    } finally {
+      restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still reports claude_auth_required for a genuine parsed auth failure", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-auth-failure-"));
+    const { workspace, commandPath, restore } = await setupExecuteEnv(root, {
+      commandWriter: writeAuthFailureClaudeCommand,
+    });
+
+    try {
+      const result = await execute({
+        runId: "run-auth-failure",
+        agent: { id: "agent-1", companyId: "co-1", name: "Test", adapterType: "claude_local", adapterConfig: {} },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          command: commandPath,
+          cwd: workspace,
+          promptTemplate: "Do work.",
+        },
+        context: {},
+        authToken: "tok",
+        onLog: async () => {},
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.errorCode).toBe("claude_auth_required");
+      expect(result.errorMessage ?? "").toContain("Please log in");
+    } finally {
+      restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   /**
    * Regression tests for https://github.com/paperclipai/paperclip/issues/2848
    *

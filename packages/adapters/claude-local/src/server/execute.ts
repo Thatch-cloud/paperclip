@@ -904,7 +904,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     // successful run to Paperclip and the heartbeat stalls silently. See RY-604.
     const claudeRefusal = isClaudeRefusalResult(parsed);
     const parsedIsError = asBoolean(parsed.is_error, false);
-    const failed = (proc.exitCode ?? 0) !== 0 || parsedIsError;
+    const parsedIsSuccess = asString(parsed.subtype, "").trim().toLowerCase() === "success" && !parsedIsError;
+    const failed = !parsedIsSuccess && ((proc.exitCode ?? 0) !== 0 || parsedIsError);
     // Validate-before-persist guard: never persist a sessionId whose transcript
     // is known-poisoned. The Claude CLI keeps an on-disk JSONL keyed by the
     // session id; if the last entry contains a non-`msg_`-prefixed
@@ -951,7 +952,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           errorMessage,
         })
       : null;
-    const resolvedErrorCode = loginMeta.requiresLogin
+    const authHealthWarning = !failed && loginMeta.requiresLogin;
+    const resolvedErrorCode = failed && loginMeta.requiresLogin
       ? "claude_auth_required"
       : failed && clearSessionForMaxTurns
       ? "max_turns_exhausted"
@@ -968,12 +970,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ...(failed && poisonedPreviousMessageId ? { stopReason: "claude_poisoned_previous_message_id" } : {}),
       ...(claudeRefusal ? { stopReason: "refusal", errorFamily: "model_refusal" } : {}),
       ...(transientUpstream ? { errorFamily: "transient_upstream" } : {}),
+      ...(authHealthWarning
+        ? {
+            authHealth: {
+              code: "claude_auth_required",
+              level: "warn",
+              ...(loginMeta.loginUrl ? { loginUrl: loginMeta.loginUrl } : {}),
+            },
+          }
+        : {}),
       ...(transientRetryNotBefore ? { retryNotBefore: transientRetryNotBefore.toISOString() } : {}),
       ...(transientRetryNotBefore ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
     };
 
     return {
-      exitCode: proc.exitCode,
+      exitCode: parsedIsSuccess ? 0 : proc.exitCode,
       signal: proc.signal,
       timedOut: false,
       errorMessage,
