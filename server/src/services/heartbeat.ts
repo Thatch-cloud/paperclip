@@ -9346,6 +9346,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             if (blockerIssueStatus === "done") {
               const dependents = await issuesSvc.listWakeableBlockedDependents(issueId);
               for (const dependent of dependents) {
+                try {
+                  await issuesSvc.update(dependent.id, {
+                    blockedByIssueIds: [],
+                    ...(dependent.status === "blocked" ? { status: "todo" } : {}),
+                  });
+                } catch (resolveErr) {
+                  logger.warn(
+                    { err: resolveErr, issueId, dependentIssueId: dependent.id },
+                    "failed to clear resolved issue blockers after workspace_finalize",
+                  );
+                }
                 await enqueueWakeup(dependent.assigneeAgentId, {
                   source: "automation",
                   triggerDetail: "system",

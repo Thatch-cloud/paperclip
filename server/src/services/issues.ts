@@ -4444,6 +4444,7 @@ export function issueService(db: Db) {
         .map(({ candidate, readiness }) => ({
           id: candidate.id,
           assigneeAgentId: candidate.assigneeAgentId!,
+          status: candidate.status,
           blockerIssueIds: readiness.blockerIssueIds,
         }));
     },
