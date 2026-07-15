@@ -317,12 +317,14 @@ describe("agent issue mutation checkout ownership", () => {
       allowed:
         input.action === "tasks:assign" ||
         input.action === "issue:read" ||
+        input.action === "issue:comment" ||
         input.action === "issue:mutate" ||
         input.action === "company_scope:read",
       action: input.action,
       reason:
         input.action === "tasks:assign" ||
           input.action === "issue:read" ||
+          input.action === "issue:comment" ||
           input.action === "issue:mutate" ||
           input.action === "company_scope:read"
           ? "allow_explicit_grant"
@@ -330,6 +332,7 @@ describe("agent issue mutation checkout ownership", () => {
       explanation:
         input.action === "tasks:assign" ||
           input.action === "issue:read" ||
+          input.action === "issue:comment" ||
           input.action === "issue:mutate" ||
           input.action === "company_scope:read"
           ? "Allowed by test default."
@@ -568,7 +571,6 @@ describe("agent issue mutation checkout ownership", () => {
   it.each([
     ["patch", (app: express.Express) => request(app).patch(`/api/issues/${issueId}`).send({ title: "Blocked" })],
     ["delete", (app: express.Express) => request(app).delete(`/api/issues/${issueId}`)],
-    ["comment", (app: express.Express) => request(app).post(`/api/issues/${issueId}/comments`).send({ body: "blocked" })],
     [
       "document upsert",
       (app: express.Express) =>
@@ -606,6 +608,18 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockWorkProductService.update).not.toHaveBeenCalled();
     expect(mockStorageService.putFile).not.toHaveBeenCalled();
     expect(mockStorageService.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it("allows peer agent plain comment on another agent's active checkout", async () => {
+    mockIssueService.addComment.mockResolvedValue({ id: "comment-1", body: "cross-boundary report-back" } as any);
+
+    const res = await request(await createApp(peerActor()))
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "cross-boundary report-back" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalled();
+    expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
   it("rejects the checked-out owner without a run id on attachment upload (401)", async () => {
@@ -975,7 +989,6 @@ describe("agent issue mutation checkout ownership", () => {
 
   it.each([
     ["todo", "patch", (app: express.Express) => request(app).patch(`/api/issues/${issueId}`).send({ title: "Todo update" })],
-    ["todo", "comment", (app: express.Express) => request(app).post(`/api/issues/${issueId}/comments`).send({ body: "Todo noise" })],
     ["blocked", "patch", (app: express.Express) => request(app).patch(`/api/issues/${issueId}`).send({ title: "Blocked update" })],
   ])("rejects peer agent %s issue %s mutations outside active checkout ownership", async (status, _kind, sendRequest) => {
     mockIssueService.getById.mockResolvedValue(makeIssue({ status: status as "todo" | "blocked", assigneeAgentId: ownerAgentId }));
@@ -987,6 +1000,19 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
     expect(mockIssueService.update).not.toHaveBeenCalled();
     expect(mockIssueService.addComment).not.toHaveBeenCalled();
+  });
+
+  it("allows peer agent plain comment on another agent's todo issue", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({ status: "todo", assigneeAgentId: ownerAgentId }));
+    mockIssueService.addComment.mockResolvedValue({ id: "comment-2", body: "report-back on todo" } as any);
+
+    const res = await request(await createApp(peerActor()))
+      .post(`/api/issues/${issueId}/comments`)
+      .send({ body: "report-back on todo" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(mockIssueService.addComment).toHaveBeenCalled();
+    expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
   it("allows same-company agent mutations on unassigned in-progress issues", async () => {
