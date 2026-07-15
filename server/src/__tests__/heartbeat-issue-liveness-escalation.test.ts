@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   activityLog,
   agents,
+  agentWakeupRequests,
   budgetPolicies,
   companies,
   costEvents,
@@ -801,9 +802,12 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
     expect(blockers.some((row) => row.blockerIssueId === freshEscalation?.id)).toBe(true);
   });
 
-  it("removes closed liveness escalations from blocker relations during reconciliation", async () => {
+  it("removes closed cancelled-blocker liveness escalations and wakes the source", async () => {
     await enableAutoRecovery();
-    const { companyId, blockedIssueId, blockerIssueId } = await seedBlockedChain();
+    const { companyId, blockedIssueId, blockerIssueId, coderId } = await seedBlockedChain({
+      blockerStatus: "cancelled",
+      blockerAssigneeAgentId: "coder",
+    });
     const heartbeat = heartbeatService(db);
 
     const first = await heartbeat.reconcileIssueGraphLiveness();
@@ -822,21 +826,42 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
 
     await db
       .update(issues)
-      .set({ status: "done", blockedByIssueIds: [] })
+      .set({ status: "done" })
       .where(eq(issues.id, escalations[0]!.id));
-    await db
-      .update(issues)
-      .set({ status: "done", blockedByIssueIds: [] })
-      .where(eq(issues.id, blockerIssueId));
 
     const second = await heartbeat.reconcileIssueGraphLiveness();
     expect(second.obsoleteRecoveryBlockerRelationsRemoved).toBe(0);
-    expect(second.doneRecoveryBlockerRelationsRemoved).toBe(1);
+    expect(second.doneRecoveryBlockerRelationsRemoved).toBe(2);
+    expect(second.doneRecoverySourcesPromoted).toBe(1);
 
     const blockers = await db
       .select({ blockerIssueId: issueRelations.issueId })
       .from(issueRelations)
       .where(eq(issueRelations.relatedIssueId, blockedIssueId));
     expect(blockers.some((row) => row.blockerIssueId === escalations[0]!.id)).toBe(false);
+    expect(blockers.some((row) => row.blockerIssueId === blockerIssueId)).toBe(false);
+
+    const source = await db
+      .select({ status: issues.status })
+      .from(issues)
+      .where(eq(issues.id, blockedIssueId))
+      .then((rows) => rows[0]);
+    expect(source?.status).toBe("todo");
+
+    const wakes = await db
+      .select({
+        reason: agentWakeupRequests.reason,
+        agentId: agentWakeupRequests.agentId,
+        payload: agentWakeupRequests.payload,
+      })
+      .from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.companyId, companyId));
+    expect(wakes).toContainEqual(expect.objectContaining({
+      agentId: coderId,
+      payload: expect.objectContaining({
+        issueId: blockedIssueId,
+        source: "liveness_recovery_closed",
+      }),
+    }));
   });
 });

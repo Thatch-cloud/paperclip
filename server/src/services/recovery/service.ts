@@ -3238,6 +3238,80 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return true;
   }
 
+  async function removeClosedRecoveryBlockersFromSource(recovery: typeof issues.$inferSelect) {
+    const parsed = parseLivenessIncidentKey(recovery.originId);
+    if (!parsed) return { blockerRelationsRemoved: 0, sourcePromoted: false, sourceIssueId: null };
+
+    const sourceIssue = await db
+      .select({
+        id: issues.id,
+        companyId: issues.companyId,
+        status: issues.status,
+        assigneeAgentId: issues.assigneeAgentId,
+      })
+      .from(issues)
+      .where(and(eq(issues.companyId, recovery.companyId), eq(issues.id, parsed.issueId)))
+      .then((rows) => rows[0] ?? null);
+    if (!sourceIssue) return { blockerRelationsRemoved: 0, sourcePromoted: false, sourceIssueId: null };
+
+    const blockerIds = await existingBlockerIssueIds(sourceIssue.companyId, sourceIssue.id);
+    const blockerIdsToRemove = new Set<string>();
+    if (blockerIds.includes(recovery.id)) blockerIdsToRemove.add(recovery.id);
+
+    if (parsed.state === "blocked_by_cancelled_issue" && blockerIds.includes(parsed.leafIssueId)) {
+      const terminalLeaf = await db
+        .select({ id: issues.id })
+        .from(issues)
+        .where(
+          and(
+            eq(issues.companyId, recovery.companyId),
+            eq(issues.id, parsed.leafIssueId),
+            inArray(issues.status, ["done", "cancelled"]),
+          ),
+        )
+        .then((rows) => rows[0] ?? null);
+      if (terminalLeaf) blockerIdsToRemove.add(parsed.leafIssueId);
+    }
+
+    if (blockerIdsToRemove.size === 0) {
+      return { blockerRelationsRemoved: 0, sourcePromoted: false, sourceIssueId: sourceIssue.id };
+    }
+
+    const nextBlockerIds = blockerIds.filter((blockerId) => !blockerIdsToRemove.has(blockerId));
+    const sourcePromoted = sourceIssue.status === "blocked" && nextBlockerIds.length === 0;
+    await issuesSvc.update(sourceIssue.id, {
+      blockedByIssueIds: nextBlockerIds,
+      ...(sourcePromoted ? { status: "todo" } : {}),
+    });
+
+    if (sourcePromoted && sourceIssue.assigneeAgentId) {
+      await deps.enqueueWakeup(sourceIssue.assigneeAgentId, {
+        source: "automation",
+        triggerDetail: "system",
+        reason: "issue_blockers_resolved",
+        idempotencyKey: `issue-blockers-resolved:${sourceIssue.id}:${recovery.id}`,
+        payload: {
+          issueId: sourceIssue.id,
+          resolvedBlockerIssueId: recovery.id,
+          blockerIssueIds: nextBlockerIds,
+          source: "liveness_recovery_closed",
+        },
+        requestedByActorType: "system",
+        requestedByActorId: null,
+        contextSnapshot: {
+          issueId: sourceIssue.id,
+          taskId: sourceIssue.id,
+          wakeReason: "issue_blockers_resolved",
+          source: "liveness_recovery.closed",
+          resolvedBlockerIssueId: recovery.id,
+          blockerIssueIds: nextBlockerIds,
+        },
+      });
+    }
+
+    return { blockerRelationsRemoved: blockerIdsToRemove.size, sourcePromoted, sourceIssueId: sourceIssue.id };
+  }
+
   async function hasActiveRunForIssueId(companyId: string, issueId: string) {
     const [contextRun, issueRun] = await Promise.all([
       db
@@ -3352,13 +3426,18 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       );
 
     let blockerRelationsRemoved = 0;
+    let sourcesPromoted = 0;
+    const promotedSourceIssueIds: string[] = [];
     for (const recovery of closedRecoveries) {
-      if (await removeRecoveryBlockerFromSource(recovery)) {
-        blockerRelationsRemoved += 1;
+      const cleanup = await removeClosedRecoveryBlockersFromSource(recovery);
+      blockerRelationsRemoved += cleanup.blockerRelationsRemoved;
+      if (cleanup.sourcePromoted) {
+        sourcesPromoted += 1;
+        if (cleanup.sourceIssueId) promotedSourceIssueIds.push(cleanup.sourceIssueId);
       }
     }
 
-    return { blockerRelationsRemoved };
+    return { blockerRelationsRemoved, sourcesPromoted, promotedSourceIssueIds };
   }
 
   function normalizeIssueGraphLivenessAutoRecoveryLookbackHours(raw: unknown) {
@@ -3772,6 +3851,8 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       obsoleteRecoveriesActiveSkipped: obsoleteRecoveryCleanup.activeSkipped,
       obsoleteRecoveryBlockerRelationsRemoved: obsoleteRecoveryCleanup.blockerRelationsRemoved,
       doneRecoveryBlockerRelationsRemoved: doneRecoveryBlockerCleanup.blockerRelationsRemoved,
+      doneRecoverySourcesPromoted: doneRecoveryBlockerCleanup.sourcesPromoted,
+      doneRecoveryPromotedSourceIssueIds: doneRecoveryBlockerCleanup.promotedSourceIssueIds,
       issueIds: [] as string[],
       escalationIssueIds: [] as string[],
       retiredRecoveryIssueIds: obsoleteRecoveryCleanup.retiredIssueIds,
@@ -3782,7 +3863,12 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       return result;
     }
 
+    const promotedSourceIssueIds = new Set(doneRecoveryBlockerCleanup.promotedSourceIssueIds);
     for (const finding of findings) {
+      if (promotedSourceIssueIds.has(finding.issueId)) {
+        result.skipped += 1;
+        continue;
+      }
       if (!isLivenessFindingInsideAutoRecoveryLookback(finding, cutoff, updatedAtByIssueKey)) {
         result.skippedOutsideLookback += 1;
         result.skipped += 1;
