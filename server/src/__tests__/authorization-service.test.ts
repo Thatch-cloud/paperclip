@@ -912,4 +912,82 @@ describeEmbeddedPostgres("authorization service", () => {
       grant: { permissionKey: "tasks:assign" },
     });
   });
+
+  // THA-1323: cross-boundary comment authorization
+  it("allows issue:comment for any same-company agent regardless of issue assignee", async () => {
+    const company = await createCompany(db, "CrossBoundaryComment");
+    const actorAgent = await createAgent(db, company.id);
+    const peerAgent = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: peerAgent.id });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: actorAgent.id, companyId: company.id },
+      action: "issue:comment",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: issue.id,
+        assigneeAgentId: peerAgent.id,
+      },
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      reason: "allow_company_agent",
+    });
+  });
+
+  it("allows issue:comment for a same-company agent on an unassigned issue", async () => {
+    const company = await createCompany(db, "CrossBoundaryCommentUnassigned");
+    const actorAgent = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: null });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: actorAgent.id, companyId: company.id },
+      action: "issue:comment",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: issue.id,
+        assigneeAgentId: null,
+      },
+    });
+
+    expect(decision).toMatchObject({ allowed: true, reason: "allow_company_agent" });
+  });
+
+  it("denies issue:comment from an agent in a different company", async () => {
+    const companyA = await createCompany(db, "CommentCrossCompanyA");
+    const companyB = await createCompany(db, "CommentCrossCompanyB");
+    const actorAgent = await createAgent(db, companyA.id);
+    const issue = await createIssue(db, companyB.id);
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: actorAgent.id, companyId: companyA.id },
+      action: "issue:comment",
+      resource: { type: "issue", companyId: companyB.id, issueId: issue.id },
+    });
+
+    expect(decision).toMatchObject({ allowed: false, reason: "deny_company_boundary" });
+  });
+
+  it("still denies issue:mutate for a cross-boundary (non-assignee) agent", async () => {
+    const company = await createCompany(db, "CrossBoundaryMutateDenied");
+    const actorAgent = await createAgent(db, company.id);
+    const ownerAgent = await createAgent(db, company.id);
+    const issue = await createIssue(db, company.id, { assigneeAgentId: ownerAgent.id });
+
+    const decision = await authorizationService(db).decide({
+      actor: { type: "agent", agentId: actorAgent.id, companyId: company.id },
+      action: "issue:mutate",
+      resource: {
+        type: "issue",
+        companyId: company.id,
+        issueId: issue.id,
+        assigneeAgentId: ownerAgent.id,
+      },
+    });
+
+    expect(decision).toMatchObject({ allowed: false });
+  });
 });
