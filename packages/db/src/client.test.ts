@@ -541,4 +541,119 @@ describeEmbeddedPostgres("applyPendingMigrations", () => {
     },
     20_000,
   );
+
+  it(
+    "repairs legacy environments tables missing company_id before run setup restarts",
+    async () => {
+      const connectionString = await createTempDatabase();
+
+      await applyPendingMigrations(connectionString);
+
+      const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
+      try {
+        const repairHash = await migrationHash("0103_environments_company_id_repair.sql");
+        const companyId = "00000000-0000-0000-0000-000000000123";
+        const environmentId = "00000000-0000-0000-0000-000000000456";
+
+        await sql.unsafe(`
+          INSERT INTO "companies" ("id", "name", "issue_prefix", "created_at", "updated_at")
+          VALUES ('${companyId}', 'Legacy Company', 'LEG', now(), now())
+        `);
+        await sql.unsafe(`
+          INSERT INTO "environments" ("id", "company_id", "name", "driver", "status", "config", "metadata", "created_at", "updated_at")
+          VALUES ('${environmentId}', '${companyId}', 'Local', 'local', 'active', '{}'::jsonb, '{"managedByPaperclip": true}'::jsonb, now(), now())
+        `);
+
+        await sql.unsafe(`ALTER TABLE "environments" DROP CONSTRAINT IF EXISTS "environments_company_id_companies_id_fk"`);
+        await sql.unsafe(`DROP INDEX IF EXISTS "environments_company_status_idx"`);
+        await sql.unsafe(`DROP INDEX IF EXISTS "environments_company_driver_idx"`);
+        await sql.unsafe(`DROP INDEX IF EXISTS "environments_company_name_idx"`);
+        await sql.unsafe(`DROP INDEX IF EXISTS "environments_company_managed_sandbox_idx"`);
+        await sql.unsafe(`ALTER TABLE "environments" DROP COLUMN "company_id"`);
+        await sql.unsafe(
+          `DELETE FROM "drizzle"."__drizzle_migrations" WHERE hash = '${repairHash}'`,
+        );
+      } finally {
+        await sql.end();
+      }
+
+      const pendingState = await inspectMigrations(connectionString);
+      expect(pendingState).toMatchObject({
+        status: "needsMigrations",
+        pendingMigrations: ["0103_environments_company_id_repair.sql"],
+        reason: "pending-migrations",
+      });
+
+      await applyPendingMigrations(connectionString);
+
+      const finalState = await inspectMigrations(connectionString);
+      expect(finalState.status).toBe("upToDate");
+
+      const verifySql = postgres(connectionString, { max: 1, onnotice: () => {} });
+      try {
+        const columns = await verifySql.unsafe<{ column_name: string; is_nullable: string; data_type: string }[]>(
+          `
+            SELECT column_name, is_nullable, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'environments'
+              AND column_name = 'company_id'
+          `,
+        );
+        expect(columns).toEqual([
+          expect.objectContaining({
+            column_name: "company_id",
+            is_nullable: "NO",
+            data_type: "uuid",
+          }),
+        ]);
+
+        const constraints = await verifySql.unsafe<{ conname: string }[]>(
+          `
+            SELECT conname
+            FROM pg_constraint
+            WHERE conname = 'environments_company_id_companies_id_fk'
+          `,
+        );
+        expect(constraints.map((row) => row.conname)).toEqual([
+          "environments_company_id_companies_id_fk",
+        ]);
+
+        const indexes = await verifySql.unsafe<{ indexname: string }[]>(
+          `
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND tablename = 'environments'
+              AND indexname IN (
+                'environments_company_status_idx',
+                'environments_company_driver_idx',
+                'environments_company_name_idx',
+                'environments_company_managed_sandbox_idx'
+              )
+            ORDER BY indexname
+          `,
+        );
+        expect(indexes.map((row) => row.indexname)).toEqual([
+          "environments_company_driver_idx",
+          "environments_company_managed_sandbox_idx",
+          "environments_company_name_idx",
+          "environments_company_status_idx",
+        ]);
+
+        const upsertRows = await verifySql.unsafe<{ id: string }[]>(
+          `
+            INSERT INTO "environments" ("company_id", "name", "driver", "status", "config", "metadata", "created_at", "updated_at")
+            VALUES ('00000000-0000-0000-0000-000000000123', 'Local', 'local', 'active', '{}'::jsonb, '{"managedByPaperclip": true}'::jsonb, now(), now())
+            ON CONFLICT ("company_id", "driver") WHERE "driver" = 'local' DO NOTHING
+            RETURNING "id"
+          `,
+        );
+        expect(upsertRows).toEqual([]);
+      } finally {
+        await verifySql.end();
+      }
+    },
+    20_000,
+  );
 });
