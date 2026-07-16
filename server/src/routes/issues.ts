@@ -5737,17 +5737,16 @@ export function issueRoutes(
       if (becameDone) {
         const dependents = await svc.listWakeableBlockedDependents(issue.id);
         for (const dependent of dependents) {
+          let repaired = false;
           try {
-            await svc.update(dependent.id, {
-              blockedByIssueIds: [],
-              ...(dependent.status === "blocked" ? { status: "todo" } : {}),
-            });
+            repaired = await svc.clearResolvedBlockerFromDependent(dependent.id, issue.id);
           } catch (err) {
             logger.warn(
               { err, issueId: issue.id, dependentIssueId: dependent.id },
               "failed to clear resolved issue blockers before wake",
             );
           }
+          if (!repaired) continue;
           addWakeup(dependent.assigneeAgentId, {
             source: "automation",
             triggerDetail: "system",
@@ -7109,17 +7108,16 @@ export function issueRoutes(
       if (becameDone) {
         const dependents = await svc.listWakeableBlockedDependents(currentIssue.id);
         for (const dependent of dependents) {
+          let repaired = false;
           try {
-            await svc.update(dependent.id, {
-              blockedByIssueIds: [],
-              ...(dependent.status === "blocked" ? { status: "todo" } : {}),
-            });
+            repaired = await svc.clearResolvedBlockerFromDependent(dependent.id, currentIssue.id);
           } catch (err) {
             logger.warn(
               { err, issueId: currentIssue.id, dependentIssueId: dependent.id },
               "failed to clear resolved issue blockers before wake",
             );
           }
+          if (!repaired) continue;
           addWakeup(dependent.assigneeAgentId, {
             source: "automation",
             triggerDetail: "system",

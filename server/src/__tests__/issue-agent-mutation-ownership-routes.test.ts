@@ -23,6 +23,7 @@ const mockIssueService = vi.hoisted(() => ({
   list: vi.fn(),
   listAttachments: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
+  clearResolvedBlockerFromDependent: vi.fn(),
   remove: vi.fn(),
   removeAttachment: vi.fn(),
   update: vi.fn(),

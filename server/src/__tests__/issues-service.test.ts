@@ -3086,6 +3086,54 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
         blockerIssueIds: expect.arrayContaining([blockerA, blockerB]),
       }),
     ]);
+    await expect(svc.clearResolvedBlockerFromDependent(blockedIssueId, blockerA)).resolves.toBe(true);
+    await expect(svc.getById(blockedIssueId)).resolves.toMatchObject({ status: "todo" });
+    await expect(svc.getRelationSummaries(blockedIssueId)).resolves.toMatchObject({ blockedBy: [] });
+  });
+
+  it("does not drop a newly added blocker when clearing a resolved blocker", async () => {
+    const companyId = randomUUID();
+    const assigneeAgentId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: assigneeAgentId,
+      companyId,
+      name: "QA",
+      role: "qa",
+      status: "active",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    const resolvedBlockerId = randomUUID();
+    const newBlockerId = randomUUID();
+    const dependentId = randomUUID();
+    await db.insert(issues).values([
+      { id: resolvedBlockerId, companyId, title: "Resolved blocker", status: "done", priority: "medium" },
+      { id: newBlockerId, companyId, title: "New blocker", status: "todo", priority: "medium" },
+      {
+        id: dependentId,
+        companyId,
+        title: "Blocked issue",
+        status: "blocked",
+        priority: "medium",
+        assigneeAgentId,
+      },
+    ]);
+    await svc.update(dependentId, { blockedByIssueIds: [resolvedBlockerId, newBlockerId] });
+
+    await expect(svc.clearResolvedBlockerFromDependent(dependentId, resolvedBlockerId)).resolves.toBe(false);
+
+    await expect(svc.getById(dependentId)).resolves.toMatchObject({ status: "blocked" });
+    await expect(svc.getRelationSummaries(dependentId)).resolves.toMatchObject({
+      blockedBy: [expect.objectContaining({ id: newBlockerId })],
+    });
   });
 
   it("gates dependents on the workspace-finalize barrier when a done blocker's execution workspace has not synced back", async () => {

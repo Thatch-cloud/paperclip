@@ -12,6 +12,7 @@ const mockIssueService = vi.hoisted(() => ({
   getRelationSummaries: vi.fn(),
   update: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
+  clearResolvedBlockerFromDependent: vi.fn(),
   getWakeableParentAfterChildCompletion: vi.fn(),
   findMentionedAgents: vi.fn(async () => []),
 }));
@@ -123,6 +124,7 @@ describe("issue dependency wakeups in issue routes", () => {
     });
     mockIssueService.getRelationSummaries.mockResolvedValue({ blockedBy: [], blocks: [] });
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.clearResolvedBlockerFromDependent.mockResolvedValue(true);
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
   });
 
@@ -173,10 +175,7 @@ describe("issue dependency wakeups in issue routes", () => {
     const res = await request(await createApp()).patch("/api/issues/issue-1").send({ status: "done" });
     expect(res.status).toBe(200);
     await vi.waitFor(() => {
-      expect(mockIssueService.update).toHaveBeenCalledWith("issue-2", {
-        blockedByIssueIds: [],
-        status: "todo",
-      });
+      expect(mockIssueService.clearResolvedBlockerFromDependent).toHaveBeenCalledWith("issue-2", "issue-1");
       expect(mockWakeup).toHaveBeenCalledWith(
         "agent-2",
         expect.objectContaining({
@@ -188,6 +187,62 @@ describe("issue dependency wakeups in issue routes", () => {
         }),
       );
     });
+  });
+
+  it("does not wake dependents when blocker repair finds a remaining blocker", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-1",
+      companyId: "company-1",
+      identifier: "PAP-100",
+      title: "Finish blocker",
+      description: null,
+      status: "blocked",
+      priority: "medium",
+      parentId: null,
+      assigneeAgentId: "agent-1",
+      assigneeUserId: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+      executionWorkspaceId: null,
+      labels: [],
+      labelIds: [],
+    });
+    mockIssueService.update.mockResolvedValue({
+      id: "issue-1",
+      companyId: "company-1",
+      identifier: "PAP-100",
+      title: "Finish blocker",
+      description: null,
+      status: "done",
+      priority: "medium",
+      parentId: null,
+      assigneeAgentId: "agent-1",
+      assigneeUserId: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+      executionWorkspaceId: null,
+      labels: [],
+      labelIds: [],
+    });
+    mockIssueService.listWakeableBlockedDependents.mockResolvedValue([
+      {
+        id: "issue-2",
+        assigneeAgentId: "agent-2",
+        status: "blocked",
+        blockerIssueIds: ["issue-1"],
+      },
+    ]);
+    mockIssueService.clearResolvedBlockerFromDependent.mockResolvedValue(false);
+
+    const res = await request(await createApp()).patch("/api/issues/issue-1").send({ status: "done" });
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(mockIssueService.clearResolvedBlockerFromDependent).toHaveBeenCalledWith("issue-2", "issue-1");
+    });
+    expect(mockWakeup).not.toHaveBeenCalledWith(
+      "agent-2",
+      expect.objectContaining({ reason: "issue_blockers_resolved" }),
+    );
   });
 
   it("wakes the parent when all direct children become terminal", async () => {

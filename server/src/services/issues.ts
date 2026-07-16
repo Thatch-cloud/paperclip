@@ -4480,6 +4480,64 @@ export function issueService(db: Db) {
         }));
     },
 
+    clearResolvedBlockerFromDependent: async (dependentIssueId: string, resolvedBlockerIssueId: string) => {
+      return db.transaction(async (tx) => {
+        const dependent = await tx
+          .select({
+            id: issues.id,
+            companyId: issues.companyId,
+            status: issues.status,
+            assigneeAgentId: issues.assigneeAgentId,
+          })
+          .from(issues)
+          .where(eq(issues.id, dependentIssueId))
+          .for("update")
+          .then((rows) => rows[0] ?? null);
+        if (!dependent) return false;
+        if (!dependent.assigneeAgentId || ["backlog", "done", "cancelled"].includes(dependent.status)) {
+          return false;
+        }
+
+        await tx
+          .delete(issueRelations)
+          .where(
+            and(
+              eq(issueRelations.companyId, dependent.companyId),
+              eq(issueRelations.issueId, resolvedBlockerIssueId),
+              eq(issueRelations.relatedIssueId, dependent.id),
+              eq(issueRelations.type, "blocks"),
+            ),
+          );
+
+        const readiness = (await listIssueDependencyReadinessMap(tx, dependent.companyId, [dependent.id])).get(dependent.id)
+          ?? createIssueDependencyReadiness(dependent.id);
+        if (!readiness.isDependencyReady) {
+          return false;
+        }
+
+        if (readiness.blockerIssueIds.length > 0) {
+          await tx
+            .delete(issueRelations)
+            .where(
+              and(
+                eq(issueRelations.companyId, dependent.companyId),
+                inArray(issueRelations.issueId, readiness.blockerIssueIds),
+                eq(issueRelations.relatedIssueId, dependent.id),
+                eq(issueRelations.type, "blocks"),
+              ),
+            );
+        }
+
+        if (dependent.status === "blocked") {
+          await tx
+            .update(issues)
+            .set({ status: "todo", updatedAt: new Date() })
+            .where(eq(issues.id, dependent.id));
+        }
+        return true;
+      });
+    },
+
     getWakeableParentAfterChildCompletion: async (parentIssueId: string) => {
       const parent = await db
         .select({

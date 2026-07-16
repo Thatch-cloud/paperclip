@@ -11,6 +11,7 @@ const mockIssueService = vi.hoisted(() => ({
   getCurrentScheduledRetry: vi.fn(),
   findMentionedAgents: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
+  clearResolvedBlockerFromDependent: vi.fn(),
   getWakeableParentAfterChildCompletion: vi.fn(),
 }));
 
@@ -233,6 +234,7 @@ describe.sequential("issue comment reopen routes", () => {
     mockIssueService.getCurrentScheduledRetry.mockReset();
     mockIssueService.findMentionedAgents.mockReset();
     mockIssueService.listWakeableBlockedDependents.mockReset();
+    mockIssueService.clearResolvedBlockerFromDependent.mockReset();
     mockIssueService.getWakeableParentAfterChildCompletion.mockReset();
     mockAccessService.canUser.mockReset();
     mockAccessService.decide.mockReset();
@@ -315,6 +317,7 @@ describe.sequential("issue comment reopen routes", () => {
     });
     mockIssueService.getCurrentScheduledRetry.mockResolvedValue(null);
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.clearResolvedBlockerFromDependent.mockResolvedValue(true);
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
     mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
     mockAccessService.canUser.mockResolvedValue(false);
@@ -1973,6 +1976,7 @@ describe.sequential("issue comment reopen routes", () => {
 
     expect(res.status).toBe(201);
     expect(mockIssueService.listWakeableBlockedDependents).toHaveBeenCalledWith(issue.id);
+    expect(mockIssueService.clearResolvedBlockerFromDependent).toHaveBeenCalledWith("dependent-1", issue.id);
     await waitForWakeup(() => {
       expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
         dependentAgentId,
