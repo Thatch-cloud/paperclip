@@ -115,6 +115,8 @@ export interface AgentKeyCreated {
   id: string;
   name: string;
   token: string;
+  scopes: string[] | null;
+  expiresAt: Date | null;
   createdAt: Date;
 }
 

@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Request, RequestHandler } from "express";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentApiKeys, agents, authUsers, companies, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
@@ -133,7 +133,13 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     const key = await db
       .select()
       .from(agentApiKeys)
-      .where(and(eq(agentApiKeys.keyHash, tokenHash), isNull(agentApiKeys.revokedAt)))
+      .where(
+        and(
+          eq(agentApiKeys.keyHash, tokenHash),
+          isNull(agentApiKeys.revokedAt),
+          or(isNull(agentApiKeys.expiresAt), gt(agentApiKeys.expiresAt, new Date())),
+        ),
+      )
       .then((rows) => rows[0] ?? null);
 
     if (!key) {
@@ -192,6 +198,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       agentId: key.agentId,
       companyId: key.companyId,
       keyId: key.id,
+      keyScopes: Array.isArray(key.scopes) ? key.scopes : null,
       runId: runIdHeader || undefined,
       source: "agent_key",
     };

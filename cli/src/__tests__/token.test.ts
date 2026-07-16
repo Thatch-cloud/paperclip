@@ -70,7 +70,11 @@ describe("token commands", () => {
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe(`http://localhost:3100/api/agents/worker?companyId=${COMPANY_ID}`);
     expect(fetchMock.mock.calls[1]?.[0]).toBe(`http://localhost:3100/api/agents/${AGENT_ID}/keys`);
-    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({ name: "external-worker" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual(expect.objectContaining({
+      name: "external-worker",
+      scopes: ["read", "write"],
+      expiresAt: expect.any(String),
+    }));
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
       agentId: AGENT_ID,
       companyId: COMPANY_ID,

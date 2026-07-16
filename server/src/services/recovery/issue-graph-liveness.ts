@@ -4,6 +4,7 @@ import { buildIssueGraphLivenessIncidentKey } from "./origins.js";
 export type IssueLivenessSeverity = "warning" | "critical";
 
 export type IssueLivenessState =
+  | "blocked_without_action_path"
   | "blocked_by_unassigned_issue"
   | "blocked_by_assigned_backlog_issue"
   | "blocked_by_uninvokable_assignee"
@@ -362,6 +363,7 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
   const agentsById = new Map(input.agents.map((agent) => [agent.id, agent]));
   const blockersByBlockedIssueId = new Map<string, IssueLivenessRelationInput[]>();
   const unresolvedBlockers = new Set<string>();
+  const blockedIssueIdsWithUnresolvedBlockers = new Set<string>();
   const findings: IssueLivenessFinding[] = [];
   const activeRuns = input.activeRuns ?? [];
   const queuedWakeRequests = input.queuedWakeRequests ?? [];
@@ -386,6 +388,7 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
       blocked.status === "blocked"
     ) {
       unresolvedBlockers.add(blocker.id);
+      blockedIssueIdsWithUnresolvedBlockers.add(blocked.id);
     }
   }
 
@@ -594,6 +597,23 @@ export function classifyIssueGraphLiveness(input: IssueGraphLivenessInput): Issu
       if (unresolvedBlockers.has(issue.id)) continue;
       const chainFinding = firstBlockedChainFinding(issue, issue, [issue], new Set());
       if (chainFinding) findings.push(chainFinding);
+      else if (!blockedIssueIdsWithUnresolvedBlockers.has(issue.id) && !hasExplicitWaitingPath(issue)) {
+        const ownerCandidates = ownerCandidatesForRecoveryIssue(issue, input.agents, agentsById, {
+          includeStalledAssignee: true,
+        });
+        findings.push(finding({
+          issue,
+          state: "blocked_without_action_path",
+          reason: `${issueLabel(issue)} is blocked with no unresolved blocker, active run, queued wake, human owner, interaction, approval, monitor, or recovery issue owning the next action.`,
+          dependencyPath: [issue],
+          recoveryIssue: issue,
+          recommendedOwnerCandidateAgentIds: ownerCandidates.map((candidate) => candidate.agentId),
+          recommendedOwnerCandidates: ownerCandidates,
+          recommendedAction:
+            `Review ${issueLabel(issue)} and either add a first-class blocker, move it to a dispatchable status, or open a bounded recovery issue that owns the next action.`,
+          blockerIssueId: issue.id,
+        }));
+      }
     }
 
     if (issue.status === "in_review" && !unresolvedBlockers.has(issue.id)) {

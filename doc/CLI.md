@@ -302,7 +302,7 @@ pnpm paperclipai agent instructions-file:delete <agent-id> --path AGENTS.md
 
 `agent local-cli` is the quickest way to run local Claude/Codex manually as a Paperclip agent:
 
-- creates a new long-lived agent API key
+- creates a new agent API key with explicit `read`/`write` scope and a one-year expiry
 - installs missing Paperclip skills into `~/.codex/skills` and `~/.claude/skills`
 - prints `export ...` lines for `PAPERCLIP_API_URL`, `PAPERCLIP_COMPANY_ID`, `PAPERCLIP_AGENT_ID`, and `PAPERCLIP_API_KEY`
 

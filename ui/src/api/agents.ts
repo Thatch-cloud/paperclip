@@ -26,8 +26,16 @@ import { ApiError, api } from "./client";
 export interface AgentKey {
   id: string;
   name: string;
+  scopes: string[] | null;
+  expiresAt: Date | null;
   createdAt: Date;
   revokedAt: Date | null;
+}
+
+function defaultAgentKeyExpiresAt() {
+  const expiresAt = new Date();
+  expiresAt.setUTCFullYear(expiresAt.getUTCFullYear() + 1);
+  return expiresAt.toISOString();
 }
 
 export interface AdapterModel {
@@ -178,7 +186,11 @@ export const agentsApi = {
   syncSkills: (id: string, desiredSkills: Array<string | AgentDesiredSkillEntry>, companyId?: string) =>
     api.post<AgentSkillSnapshot>(agentPath(id, companyId, "/skills/sync"), { desiredSkills }),
   createKey: (id: string, name: string, companyId?: string) =>
-    api.post<AgentKeyCreated>(agentPath(id, companyId, "/keys"), { name }),
+    api.post<AgentKeyCreated>(agentPath(id, companyId, "/keys"), {
+      name,
+      scopes: ["read", "write"],
+      expiresAt: defaultAgentKeyExpiresAt(),
+    }),
   revokeKey: (agentId: string, keyId: string, companyId?: string) =>
     api.delete<{ ok: true }>(agentPath(agentId, companyId, `/keys/${encodeURIComponent(keyId)}`)),
   runtimeState: (id: string, companyId?: string) =>

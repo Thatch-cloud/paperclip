@@ -38,12 +38,16 @@ import {
   suggestTasksPayloadSchema,
   suggestTasksResultSchema,
 } from "@paperclipai/shared";
-import { conflict, notFound, unprocessable } from "../errors.js";
+import { conflict, forbidden, notFound, unprocessable } from "../errors.js";
 import { issueService, listUnfinalizedExecutionWorkspaceIds } from "./issues.js";
 
 type InteractionActor = {
   agentId?: string | null;
   userId?: string | null;
+};
+
+type CancelInteractionOptions = {
+  canCancelAny?: boolean;
 };
 
 const ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT =
@@ -153,6 +157,39 @@ function hydrateInteraction(
       } satisfies RequestCheckboxConfirmationInteraction;
     default:
       throw unprocessable(`Unknown interaction kind: ${row.kind}`);
+  }
+}
+
+function actorCreatedInteraction(current: IssueThreadInteractionRow, actor: InteractionActor) {
+  if (actor.agentId && current.createdByAgentId === actor.agentId) return true;
+  if (actor.userId && current.createdByUserId === actor.userId) return true;
+  return false;
+}
+
+function buildCancelledInteractionResult(current: IssueThreadInteractionRow, reason: string | null) {
+  switch (current.kind) {
+    case "ask_user_questions":
+      return {
+        version: 1 as const,
+        answers: [],
+        cancelled: true as const,
+        cancellationReason: reason,
+        summaryMarkdown: null,
+      };
+    case "request_confirmation":
+    case "request_checkbox_confirmation":
+      return {
+        version: 1 as const,
+        outcome: "cancelled" as const,
+        reason,
+      };
+    case "suggest_tasks":
+      return {
+        version: 1 as const,
+        cancellationReason: reason,
+      };
+    default:
+      throw unprocessable(`Unknown interaction kind: ${current.kind}`);
   }
 }
 
@@ -1395,11 +1432,12 @@ export function issueThreadInteractionService(db: Db) {
       return hydrateInteraction(updated);
     },
 
-    cancelQuestions: async (
+    cancelInteraction: async (
       issue: { id: string; companyId: string },
       interactionId: string,
       input: CancelIssueThreadInteraction,
       actor: InteractionActor,
+      options: CancelInteractionOptions = {},
     ) => {
       const data = cancelIssueThreadInteractionSchema.parse(input);
       const current = await db
@@ -1412,11 +1450,11 @@ export function issueThreadInteractionService(db: Db) {
       if (current.companyId !== issue.companyId || current.issueId !== issue.id) {
         throw notFound("Interaction not found");
       }
-      if (current.kind !== "ask_user_questions") {
-        throw unprocessable("Only ask_user_questions interactions can be cancelled");
-      }
       if (current.status !== "pending") {
         throw conflict("Interaction has already been resolved");
+      }
+      if (!options.canCancelAny && !actorCreatedInteraction(current, actor)) {
+        throw forbidden("Only the interaction creator or board can cancel this interaction");
       }
 
       const reason = data.reason?.trim() || null;
@@ -1424,13 +1462,7 @@ export function issueThreadInteractionService(db: Db) {
         .update(issueThreadInteractions)
         .set({
           status: "cancelled",
-          result: {
-            version: 1,
-            answers: [],
-            cancelled: true,
-            cancellationReason: reason,
-            summaryMarkdown: null,
-          },
+          result: buildCancelledInteractionResult(current, reason),
           resolvedByAgentId: actor.agentId ?? null,
           resolvedByUserId: actor.userId ?? null,
           resolvedAt: new Date(),

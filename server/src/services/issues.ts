@@ -44,6 +44,8 @@ import type {
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
   IssueRelationIssueSummary,
+  IssueThreadInteractionKind,
+  IssueThreadInteractionResult,
   LowTrustBoundary,
   SuccessfulRunHandoffState,
 } from "@paperclipai/shared";
@@ -100,6 +102,17 @@ const ISSUE_COMMENT_RUN_LOG_DERIVATION_CHUNK_BYTES = 256_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_END_SLACK_MS = 60_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_MAX_PARALLEL_READS = 8;
 const DELETED_ISSUE_COMMENT_BODY = "";
+const TERMINAL_ISSUE_INTERACTION_EXPIRY_RESULTS = {
+  request_confirmation: { version: 1, outcome: "issue_terminal" },
+  request_checkbox_confirmation: { version: 1, outcome: "issue_terminal" },
+  ask_user_questions: { version: 1, answers: [], cancelled: true, cancellationReason: "Issue reached terminal status" },
+  suggest_tasks: { version: 1 },
+} satisfies Record<IssueThreadInteractionKind, IssueThreadInteractionResult>;
+
+const TERMINAL_ISSUE_INTERACTION_EXPIRY_ENTRIES = Object.entries(TERMINAL_ISSUE_INTERACTION_EXPIRY_RESULTS) as Array<[
+  IssueThreadInteractionKind,
+  IssueThreadInteractionResult,
+]>;
 function assertTransition(from: string, to: string) {
   if (from === to) return;
   if (!ALL_ISSUE_STATUSES.includes(to)) {
@@ -131,20 +144,25 @@ async function expirePendingInteractionsForTerminalIssue(
   actor: { agentId?: string | null; userId?: string | null },
 ) {
   const now = new Date();
-  await dbOrTx
-    .update(issueThreadInteractions)
-    .set({
-      status: "expired",
-      resolvedByAgentId: actor.agentId ?? null,
-      resolvedByUserId: actor.userId ?? null,
-      resolvedAt: now,
-      updatedAt: now,
-    })
-    .where(and(
-      eq(issueThreadInteractions.companyId, issue.companyId),
-      eq(issueThreadInteractions.issueId, issue.id),
-      eq(issueThreadInteractions.status, "pending"),
-    ));
+  const baseSet = {
+    status: "expired",
+    resolvedByAgentId: actor.agentId ?? null,
+    resolvedByUserId: actor.userId ?? null,
+    resolvedAt: now,
+    updatedAt: now,
+  } as const;
+  const pendingOnIssue = and(
+    eq(issueThreadInteractions.companyId, issue.companyId),
+    eq(issueThreadInteractions.issueId, issue.id),
+    eq(issueThreadInteractions.status, "pending"),
+  );
+
+  for (const [kind, result] of TERMINAL_ISSUE_INTERACTION_EXPIRY_ENTRIES) {
+    await dbOrTx
+      .update(issueThreadInteractions)
+      .set({ ...baseSet, result })
+      .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, kind)));
+  }
 }
 
 function readStringFromRecord(record: unknown, key: string) {
@@ -2796,6 +2814,25 @@ async function listIssueBlockedInboxAttentionMap(
       continue;
     }
 
+    const hasMonitor = Boolean(row.monitorNextCheckAt && row.monitorNextCheckAt.getTime() > Date.now());
+    const external = row.status === "blocked" && !hasMonitor ? externalWaitFromDescription(row.description) : null;
+    if (external) {
+      result.set(row.id, attentionBase({
+        state: "external_wait",
+        reason: "external_owner_action",
+        severity: "medium",
+        stoppedSinceAt: row.updatedAt,
+        owner: { type: "external", agentId: null, userId: null, label: null },
+        action: {
+          label: "External owner action",
+          detail: null,
+        },
+        sourceIssue: source,
+        externalDetailsRedacted: true,
+      }));
+      continue;
+    }
+
     const finding = findingByIssueId.get(row.id);
     if (finding) {
       const leaf = finding.dependencyPath.length > 1
@@ -2829,6 +2866,8 @@ async function listIssueBlockedInboxAttentionMap(
                 return "Assign active owner";
               case "blocked_by_cancelled_issue":
                 return "Replace blocker";
+              case "blocked_without_action_path":
+                return "Create recovery path";
               case "invalid_review_participant":
                 return "Repair review participant";
               case "in_review_without_action_path":
@@ -2841,25 +2880,6 @@ async function listIssueBlockedInboxAttentionMap(
         leafIssue: issueRef(leaf),
         recoveryIssue: issueRef(issuesById.get(finding.recoveryIssueId)),
         sampleIssueIdentifier: leaf?.identifier ?? finding.identifier,
-      }));
-      continue;
-    }
-
-    const hasMonitor = Boolean(row.monitorNextCheckAt && row.monitorNextCheckAt.getTime() > Date.now());
-    const external = row.status === "blocked" && !hasMonitor ? externalWaitFromDescription(row.description) : null;
-    if (external) {
-      result.set(row.id, attentionBase({
-        state: "external_wait",
-        reason: "external_owner_action",
-        severity: "medium",
-        stoppedSinceAt: row.updatedAt,
-        owner: { type: "external", agentId: null, userId: null, label: null },
-        action: {
-          label: "External owner action",
-          detail: null,
-        },
-        sourceIssue: source,
-        externalDetailsRedacted: true,
       }));
       continue;
     }
@@ -3655,14 +3675,18 @@ export function issueService(db: Db) {
       throw unprocessable("Issue cannot be blocked by itself");
     }
 
+    // Always lock the dependent issue row first — even in the clear-to-empty case —
+    // so that a concurrent blocker INSERT cannot commit between the readiness check
+    // and this delete, silently removing a blocker that was just added.
+    const lockedIssueIds = [issueId, ...deduped].sort();
+    await dbOrTx.execute(
+      sql`SELECT ${issues.id} FROM ${issues}
+          WHERE ${and(eq(issues.companyId, companyId), inArray(issues.id, lockedIssueIds))}
+          ORDER BY ${issues.id}
+          FOR UPDATE`,
+    );
+
     if (deduped.length > 0) {
-      const lockedIssueIds = [issueId, ...deduped].sort();
-      await dbOrTx.execute(
-        sql`SELECT ${issues.id} FROM ${issues}
-            WHERE ${and(eq(issues.companyId, companyId), inArray(issues.id, lockedIssueIds))}
-            ORDER BY ${issues.id}
-            FOR UPDATE`,
-      );
       const relatedIssues = await dbOrTx
         .select({ id: issues.id })
         .from(issues)
@@ -3971,7 +3995,7 @@ export function issueService(db: Db) {
     });
   }
 
-  return {
+  const svc = {
     clearExecutionRunIfTerminal,
     clearCheckoutRunIfTerminal,
 
@@ -4536,6 +4560,61 @@ export function issueService(db: Db) {
         }
         return true;
       });
+    },
+
+    resolveBlockedDependents: async (blockerIssueId: string, logContext: Record<string, unknown> = {}) => {
+      const candidates = await svc.listWakeableBlockedDependents(blockerIssueId);
+      const resolved: typeof candidates = [];
+      for (const candidate of candidates) {
+        try {
+          const cleared = await db.transaction(async (tx) => {
+            // Lock the dependent row before any read or delete so that a concurrent
+            // blocker INSERT cannot slip in after the outer readiness check.
+            const locked = await tx
+              .select({ status: issues.status, companyId: issues.companyId })
+              .from(issues)
+              .where(eq(issues.id, candidate.id))
+              .for("update")
+              .then((rows) => rows[0] ?? null);
+            if (!locked) return false;
+
+            // Re-verify readiness inside the lock: if a concurrent blocker was added
+            // after listWakeableBlockedDependents ran, it will appear here and we abort
+            // rather than silently deleting an edge that was just added.
+            const readinessMap = await listIssueDependencyReadinessMap(
+              tx,
+              locked.companyId,
+              [candidate.id],
+            );
+            const readiness = readinessMap.get(candidate.id);
+            if (!readiness?.isDependencyReady) return false;
+
+            await tx
+              .delete(issueRelations)
+              .where(
+                and(
+                  eq(issueRelations.companyId, locked.companyId),
+                  eq(issueRelations.relatedIssueId, candidate.id),
+                  eq(issueRelations.type, "blocks"),
+                ),
+              );
+            if (locked.status === "blocked") {
+              await tx
+                .update(issues)
+                .set({ status: "todo", updatedAt: new Date() })
+                .where(eq(issues.id, candidate.id));
+            }
+            return true;
+          });
+          if (cleared) resolved.push(candidate);
+        } catch (err) {
+          logger.warn(
+            { err, ...logContext, blockerIssueId, dependentIssueId: candidate.id },
+            "failed to clear resolved issue blockers before wake",
+          );
+        }
+      }
+      return resolved;
     },
 
     getWakeableParentAfterChildCompletion: async (parentIssueId: string) => {
@@ -6613,4 +6692,5 @@ export function issueService(db: Db) {
       }));
     },
   };
+  return svc;
 }

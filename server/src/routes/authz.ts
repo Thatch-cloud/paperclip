@@ -55,6 +55,17 @@ export function assertCompanyAccess(req: Request, companyId: string) {
   if (req.actor.type === "agent" && req.actor.companyId !== companyId) {
     throw forbidden("Agent key cannot access another company");
   }
+  if (req.actor.type === "agent" && Array.isArray(req.actor.keyScopes)) {
+    const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
+    const isSafeMethod = ["GET", "HEAD", "OPTIONS"].includes(method);
+    if (isSafeMethod) {
+      if (!req.actor.keyScopes.includes("read") && !req.actor.keyScopes.includes("write")) {
+        throw forbidden("Agent key scope does not allow reads");
+      }
+    } else if (!req.actor.keyScopes.includes("write")) {
+      throw forbidden("Agent key scope is read-only");
+    }
+  }
   if (req.actor.type === "board" && req.actor.source !== "local_implicit") {
     const allowedCompanies = req.actor.companyIds ?? [];
     if (!allowedCompanies.includes(companyId)) {

@@ -5735,18 +5735,8 @@ export function issueRoutes(
 
       const becameDone = existing.status !== "done" && issue.status === "done";
       if (becameDone) {
-        const dependents = await svc.listWakeableBlockedDependents(issue.id);
+        const dependents = await svc.resolveBlockedDependents(issue.id, { issueId: issue.id });
         for (const dependent of dependents) {
-          let repaired = false;
-          try {
-            repaired = await svc.clearResolvedBlockerFromDependent(dependent.id, issue.id);
-          } catch (err) {
-            logger.warn(
-              { err, issueId: issue.id, dependentIssueId: dependent.id },
-              "failed to clear resolved issue blockers before wake",
-            );
-          }
-          if (!repaired) continue;
           addWakeup(dependent.assigneeAgentId, {
             source: "automation",
             triggerDetail: "system",
@@ -5807,7 +5797,7 @@ export function issueRoutes(
           .wakeup(agentId, wakeup)
           .catch((err) => logger.warn({ err, issueId: issue.id, agentId }, "failed to wake agent on issue update"));
       }
-    })();
+    })().catch((err) => logger.warn({ err, issueId: issue.id }, "background wakeup processing failed on issue update"));
 
     res.json({ ...issueResponse, comment });
   });
@@ -6349,13 +6339,18 @@ export function issueRoutes(
         return;
       }
       assertCompanyAccess(req, issue.companyId);
-      assertBoard(req);
 
       const actor = getActorInfo(req);
-      const interaction = await issueThreadInteractionService(db).cancelQuestions(issue, interactionId, req.body, {
-        agentId: actor.agentId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      });
+      const interaction = await issueThreadInteractionService(db).cancelInteraction(
+        issue,
+        interactionId,
+        req.body,
+        {
+          agentId: actor.agentId,
+          userId: actor.actorType === "user" ? actor.actorId : null,
+        },
+        { canCancelAny: req.actor.type === "board" },
+      );
 
       await logActivity(db, {
         companyId: issue.companyId,
@@ -7106,18 +7101,8 @@ export function issueRoutes(
 
       const becameDone = issueBeforeCommentDecision.status !== "done" && currentIssue.status === "done";
       if (becameDone) {
-        const dependents = await svc.listWakeableBlockedDependents(currentIssue.id);
+        const dependents = await svc.resolveBlockedDependents(currentIssue.id, { issueId: currentIssue.id });
         for (const dependent of dependents) {
-          let repaired = false;
-          try {
-            repaired = await svc.clearResolvedBlockerFromDependent(dependent.id, currentIssue.id);
-          } catch (err) {
-            logger.warn(
-              { err, issueId: currentIssue.id, dependentIssueId: dependent.id },
-              "failed to clear resolved issue blockers before wake",
-            );
-          }
-          if (!repaired) continue;
           addWakeup(dependent.assigneeAgentId, {
             source: "automation",
             triggerDetail: "system",
@@ -7179,7 +7164,7 @@ export function issueRoutes(
           .wakeup(agentId, wakeup)
           .catch((err) => logger.warn({ err, issueId: currentIssue.id, agentId }, "failed to wake agent on issue comment"));
       }
-    })();
+    })().catch((err) => logger.warn({ err, issueId: currentIssue.id }, "background wakeup processing failed on issue comment"));
 
     res.status(201).json(comment);
   });

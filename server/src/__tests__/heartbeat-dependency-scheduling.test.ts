@@ -961,11 +961,12 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
     });
   });
 
-  it("reconcileFrozenBlockedDependents re-arms a blocked issue whose blocker is already done", async () => {
+  it("clears the blocker edge and moves a blocked dependent to todo when the blocker run completes (workspace_finalize path)", async () => {
     const companyId = randomUUID();
-    const agentId = randomUUID();
+    const blockerAgentId = randomUUID();
+    const dependentAgentId = randomUUID();
     const blockerId = randomUUID();
-    const frozenIssueId = randomUUID();
+    const dependentId = randomUUID();
 
     await db.insert(companies).values({
       id: companyId,
@@ -973,86 +974,100 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
       issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
       requireBoardApprovalForNewAgents: false,
     });
-    await db.insert(agents).values({
-      id: agentId,
-      companyId,
-      name: "TestAgent",
-      role: "engineer",
-      status: "active",
-      adapterType: "codex_local",
-      adapterConfig: {},
-      runtimeConfig: {
-        heartbeat: {
-          wakeOnDemand: true,
-          maxConcurrentRuns: 1,
-        },
+    await db.insert(agents).values([
+      {
+        id: blockerAgentId,
+        companyId,
+        name: "BlockerAgent",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: { heartbeat: { wakeOnDemand: true, maxConcurrentRuns: 1 } },
+        permissions: {},
       },
-      permissions: {},
-    });
-    // Blocker is already done — simulates the frozen-stock scenario where the
-    // blocker reached terminal status before the real-time repair was deployed.
+      {
+        id: dependentAgentId,
+        companyId,
+        name: "DependentAgent",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: { heartbeat: { wakeOnDemand: false, maxConcurrentRuns: 1 } },
+        permissions: {},
+      },
+    ]);
     await db.insert(issues).values([
       {
         id: blockerId,
         companyId,
-        title: "Already Done Blocker",
-        status: "done",
-        priority: "high",
+        title: "Blocker",
+        status: "todo",
+        priority: "medium",
+        assigneeAgentId: blockerAgentId,
       },
       {
-        id: frozenIssueId,
+        id: dependentId,
         companyId,
-        title: "Frozen Blocked Issue",
+        title: "Dependent",
         status: "blocked",
         priority: "medium",
-        assigneeAgentId: agentId,
+        assigneeAgentId: dependentAgentId,
       },
     ]);
     await db.insert(issueRelations).values({
       companyId,
       issueId: blockerId,
-      relatedIssueId: frozenIssueId,
+      relatedIssueId: dependentId,
       type: "blocks",
     });
 
-    const result = await heartbeat.reconcileFrozenBlockedDependents();
-    expect(result.repaired).toBe(1);
-    expect(result.issueIds).toContain(frozenIssueId);
+    // Adapter marks the blocker as done during execution — simulates completing the blocker task.
+    mockAdapterExecute.mockImplementationOnce(async () => {
+      await db.update(issues).set({ status: "done", updatedAt: new Date() }).where(eq(issues.id, blockerId));
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        errorMessage: null,
+        summary: "Blocker task done.",
+        provider: "test",
+        model: "test-model",
+      };
+    });
 
-    // Issue must have moved to todo with blocker edges cleared.
-    const frozenIssueAfter = await db
+    const blockerWake = await heartbeat.wakeup(blockerAgentId, {
+      source: "assignment",
+      triggerDetail: "system",
+      reason: "issue_assigned",
+      payload: { issueId: blockerId },
+      contextSnapshot: { issueId: blockerId, wakeReason: "issue_assigned" },
+    });
+    expect(blockerWake).not.toBeNull();
+
+    await waitForCondition(async () => {
+      const run = await db
+        .select({ status: heartbeatRuns.status })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, blockerWake!.id))
+        .then((rows) => rows[0] ?? null);
+      return run?.status === "succeeded";
+    }, 10_000);
+
+    // Regression coverage for the terminal-status race: once the blocker run is
+    // visible as succeeded, workspace_finalize must already have cleared the edge.
+    const remainingEdges = await db
+      .select()
+      .from(issueRelations)
+      .where(eq(issueRelations.relatedIssueId, dependentId));
+    expect(remainingEdges).toHaveLength(0);
+
+    const dependent = await db
       .select({ status: issues.status })
       .from(issues)
-      .where(eq(issues.id, frozenIssueId))
+      .where(eq(issues.id, dependentId))
       .then((rows) => rows[0] ?? null);
-    expect(frozenIssueAfter?.status).toBe("todo");
-
-    const blockerEdgesAfter = await db
-      .select({ id: issueRelations.id })
-      .from(issueRelations)
-      .where(
-        and(
-          eq(issueRelations.companyId, companyId),
-          eq(issueRelations.relatedIssueId, frozenIssueId),
-          eq(issueRelations.type, "blocks"),
-        ),
-      );
-    expect(blockerEdgesAfter).toHaveLength(0);
-
-    // A wake must be queued for the assignee with the correct reason.
-    const wake = await db
-      .select({
-        status: agentWakeupRequests.status,
-        reason: agentWakeupRequests.reason,
-      })
-      .from(agentWakeupRequests)
-      .where(
-        and(
-          eq(agentWakeupRequests.agentId, agentId),
-          sql`${agentWakeupRequests.payload} ->> 'issueId' = ${frozenIssueId}`,
-        ),
-      )
-      .then((rows) => rows[0] ?? null);
-    expect(wake?.reason).toBe("issue_blockers_resolved");
+    expect(dependent?.status).toBe("todo");
   });
 });

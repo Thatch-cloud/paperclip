@@ -4173,7 +4173,11 @@ export function accessRoutes(
 
       const created = await agents.createApiKey(
         joinRequest.createdAgentId,
-        "initial-join-key"
+        {
+          name: "initial-join-key",
+          scopes: ["read", "write"],
+          expiresAt: defaultAgentKeyExpiresAt(),
+        }
       );
 
       await logActivity(db, {
@@ -4193,6 +4197,8 @@ export function accessRoutes(
         keyId: created.id,
         token: created.token,
         agentId: joinRequest.createdAgentId,
+        scopes: created.scopes,
+        expiresAt: created.expiresAt,
         createdAt: created.createdAt
       });
     }
@@ -4622,4 +4628,10 @@ export function accessRoutes(
   );
 
   return router;
+}
+
+function defaultAgentKeyExpiresAt() {
+  const expiresAt = new Date();
+  expiresAt.setUTCFullYear(expiresAt.getUTCFullYear() + 1);
+  return expiresAt.toISOString();
 }

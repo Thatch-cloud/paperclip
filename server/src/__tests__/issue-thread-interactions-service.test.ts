@@ -21,6 +21,11 @@ import {
   workspaceOperations,
 } from "@paperclipai/db";
 import {
+  ISSUE_THREAD_INTERACTION_KINDS,
+  type IssueThreadInteractionKind,
+  type IssueThreadInteractionPayload,
+} from "@paperclipai/shared";
+import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
@@ -185,6 +190,95 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     expect(terminalRows.map((row) => row.status).sort()).toEqual(["accepted", "expired"]);
     expect(activeRows).toHaveLength(activeStatuses.length);
     expect(activeRows.every((row) => row.status === "pending")).toBe(true);
+  });
+
+  it("sets kind-appropriate results on interactions expired by terminal-issue transition", async () => {
+    const companyId = randomUUID();
+    const goalId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false });
+    await db.insert(goals).values({ id: goalId, companyId, title: "Results test", level: "task", status: "active" });
+    await db.insert(issues).values({ id: issueId, companyId, goalId, title: "Issue going terminal", status: "in_progress", priority: "medium" });
+
+    const payloadByKind = {
+      suggest_tasks: { version: 1, tasks: [{ clientKey: "t", title: "Follow-up" }] },
+      ask_user_questions: {
+        version: 1,
+        questions: [{ id: "q1", prompt: "Which?", selectionMode: "single", options: [{ id: "o1", label: "A" }] }],
+      },
+      request_confirmation: { version: 1, prompt: "Confirm?" },
+      request_checkbox_confirmation: {
+        version: 1,
+        prompt: "Select?",
+        options: [{ id: "o1", label: "Option A" }],
+      },
+    } satisfies Record<IssueThreadInteractionKind, IssueThreadInteractionPayload>;
+
+    await db.insert(issueThreadInteractions).values(
+      ISSUE_THREAD_INTERACTION_KINDS.map((kind) => ({
+        companyId,
+        issueId,
+        kind,
+        status: "pending",
+        continuationPolicy: kind === "request_confirmation" ? "none" : "wake_assignee",
+        payload: payloadByKind[kind],
+      })),
+    );
+
+    await issuesSvc.update(issueId, { status: "done", actorAgentId: null, actorUserId: null });
+
+    const rows = await db
+      .select({ kind: issueThreadInteractions.kind, status: issueThreadInteractions.status, result: issueThreadInteractions.result })
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.issueId, issueId))
+      .orderBy(issueThreadInteractions.kind);
+
+    expect(rows).toHaveLength(ISSUE_THREAD_INTERACTION_KINDS.length);
+    for (const row of rows) {
+      expect(row.status).toBe("expired");
+    }
+
+    const byKind = Object.fromEntries(rows.map((r) => [r.kind, r.result]));
+    expect(byKind["suggest_tasks"]).toMatchObject({ version: 1 });
+    expect(byKind["ask_user_questions"]).toMatchObject({ version: 1, answers: [], cancelled: true });
+    expect(byKind["request_confirmation"]).toMatchObject({ version: 1, outcome: "issue_terminal" });
+    expect(byKind["request_checkbox_confirmation"]).toMatchObject({ version: 1, outcome: "issue_terminal" });
+  });
+
+  it("expires pending interactions when an issue is cancelled", async () => {
+    const companyId = randomUUID();
+    const goalId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false });
+    await db.insert(goals).values({ id: goalId, companyId, title: "Cancelled expiry test", level: "task", status: "active" });
+    await db.insert(issues).values({ id: issueId, companyId, goalId, title: "Issue being cancelled", status: "in_progress", priority: "medium" });
+
+    const payload = { version: 1 as const, tasks: [{ clientKey: "t", title: "Follow-up" }] };
+    await db.insert(issueThreadInteractions).values({ companyId, issueId, kind: "suggest_tasks", status: "pending", continuationPolicy: "wake_assignee", payload });
+
+    await issuesSvc.update(issueId, { status: "cancelled", actorAgentId: null, actorUserId: null });
+
+    const rows = await db
+      .select({ status: issueThreadInteractions.status })
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.issueId, issueId));
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("expired");
   });
 
   it("accepts suggested tasks by creating a rooted issue tree under the current issue", async () => {
@@ -627,14 +721,14 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       userId: "local-board",
     });
 
-    const cancelled = await interactionsSvc.cancelQuestions({
+    const cancelled = await interactionsSvc.cancelInteraction({
       id: issueId,
       companyId,
     }, created.id, {
       reason: "Not needed anymore",
     }, {
       userId: "local-board",
-    });
+    }, { canCancelAny: true });
 
     expect(cancelled.status).toBe("cancelled");
     expect(cancelled.result).toEqual({
@@ -653,6 +747,95 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     }, {
       userId: "local-board",
     })).rejects.toThrow("Interaction has already been resolved");
+  });
+
+  it("lets the creating agent cancel its own pending interaction but rejects other agents", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Agent-owned cancellation");
+    const creatorAgentId = randomUUID();
+    const otherAgentId = randomUUID();
+
+    await db.insert(agents).values([
+      {
+        id: creatorAgentId,
+        companyId,
+        name: "Creator",
+        role: "engineer",
+        status: "idle",
+      },
+      {
+        id: otherAgentId,
+        companyId,
+        name: "Other",
+        role: "engineer",
+        status: "idle",
+      },
+    ]);
+
+    const created = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "request_confirmation",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        prompt: "Approve this plan?",
+      },
+    }, {
+      agentId: creatorAgentId,
+    });
+
+    await expect(interactionsSvc.cancelInteraction({
+      id: issueId,
+      companyId,
+    }, created.id, {
+      reason: "Wrong owner",
+    }, {
+      agentId: otherAgentId,
+    })).rejects.toThrow("Only the interaction creator or board can cancel this interaction");
+
+    const cancelled = await interactionsSvc.cancelInteraction({
+      id: issueId,
+      companyId,
+    }, created.id, {
+      reason: "Plan superseded by a new revision",
+    }, {
+      agentId: creatorAgentId,
+    });
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.result).toEqual({
+      version: 1,
+      outcome: "cancelled",
+      reason: "Plan superseded by a new revision",
+    });
+
+    const [row] = await db
+      .select({
+        status: issueThreadInteractions.status,
+        result: issueThreadInteractions.result,
+        resolvedByAgentId: issueThreadInteractions.resolvedByAgentId,
+        resolvedAt: issueThreadInteractions.resolvedAt,
+      })
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.id, created.id));
+
+    expect(row).toMatchObject({
+      status: "cancelled",
+      result: {
+        version: 1,
+        outcome: "cancelled",
+        reason: "Plan superseded by a new revision",
+      },
+      resolvedByAgentId: creatorAgentId,
+    });
+    expect(row?.resolvedAt).toBeInstanceOf(Date);
+
+    const pendingRows = await db
+      .select({ id: issueThreadInteractions.id })
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.status, "pending"));
+    expect(pendingRows).toEqual([]);
   });
 
   it("reuses the existing interaction when the same idempotency key is submitted twice", async () => {
