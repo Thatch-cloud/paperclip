@@ -15,6 +15,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { recoveryService } from "../services/recovery/service.ts";
 import { issueService } from "../services/issues.ts";
+import * as issueModule from "../services/issues.ts";
 
 const mockTelemetryClient = vi.hoisted(() => ({ track: vi.fn() }));
 vi.mock("../telemetry.ts", () => ({ getTelemetryClient: () => mockTelemetryClient }));
@@ -44,6 +45,7 @@ describeEmbeddedPostgres("recovery reconcileFrozenBlockedDependents", () => {
   }, 20_000);
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await db.delete(issueRelations);
     await db.delete(activityLog);
     await db.delete(issues);
@@ -270,6 +272,103 @@ describeEmbeddedPostgres("recovery reconcileFrozenBlockedDependents", () => {
       .where(eq(issues.id, dependentId))
       .then((rows) => rows[0]);
     expect(row?.status).toBe("blocked");
+    expect(wakeupCalls).toHaveLength(0);
+  });
+
+  it("race guard: live blocker inserted AFTER outer readiness scan must not be wiped", async () => {
+    // This is the gate-distinguishing test. It models the true concurrent race:
+    //
+    //   1. Sweeper outer readiness scan sees only doneBlocker (done) → isDependencyReady:true
+    //   2. Concurrent PATCH inserts liveBlocker edge into DB  ← race window
+    //   3. Sweeper proceeds to fix the dependent
+    //
+    // At b21d3447 (racy sweeper): step 3 calls
+    //   issuesSvc.update(candidate.id, { blockedByIssueIds: [], status: "todo" })
+    // which wipes ALL blocker edges unconditionally, including the just-inserted
+    // live one. Result: repaired === 1, status "todo", wakeup fires. TEST FAILS.
+    //
+    // At head (fixed sweeper): step 3 calls
+    //   clearResolvedBlockerFromDependent(candidate.id, doneBlockerId)
+    // which re-reads readiness inside a FOR UPDATE transaction. It finds
+    // liveBlocker still present (isDependencyReady:false), returns false, and
+    // the sweeper records skipped without touching status or wakeup.
+    // Result: repaired === 0, skipped === 1, status "blocked", no wakeup. TEST PASSES.
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const doneBlockerId = randomUUID();
+    const liveBlockerId = randomUUID();
+    const dependentId = randomUUID();
+
+    await db.insert(issues).values([
+      { id: doneBlockerId, companyId, title: "Done blocker", status: "done", priority: "high" },
+      { id: liveBlockerId, companyId, title: "Concurrent live blocker", status: "todo", priority: "high" },
+      {
+        id: dependentId,
+        companyId,
+        title: "Dependent",
+        status: "blocked",
+        priority: "medium",
+        assigneeAgentId: agentId,
+      },
+    ]);
+    // Only the done-blocker edge present — outer readiness scan sees isDependencyReady:true.
+    await db.insert(issueRelations).values({
+      companyId,
+      issueId: doneBlockerId,
+      relatedIssueId: dependentId,
+      type: "blocks",
+    });
+
+    // Intercept the issueService factory so the instance the sweeper constructs
+    // has a wrapped listDependencyReadiness. The wrapper runs the real query
+    // (which returns "ready" — only doneBlocker is present so far), then inserts
+    // the live-blocker edge before returning control to the sweeper. This places
+    // the live edge exactly in the race window: after the outer readiness verdict
+    // but before the sweeper's next action (update or clearResolvedBlockerFromDependent).
+    const origFactory = issueModule.issueService;
+    let raceInjected = false;
+    vi.spyOn(issueModule, "issueService").mockImplementationOnce((innerDb) => {
+      const svc = origFactory(innerDb);
+      const origListDependencyReadiness = svc.listDependencyReadiness;
+      return {
+        ...svc,
+        listDependencyReadiness: async (...args: Parameters<typeof origListDependencyReadiness>) => {
+          const result = await origListDependencyReadiness.apply(svc, args);
+          if (!raceInjected) {
+            raceInjected = true;
+            await db.insert(issueRelations).values({
+              companyId,
+              issueId: liveBlockerId,
+              relatedIssueId: dependentId,
+              type: "blocks",
+            });
+          }
+          return result;
+        },
+      };
+    });
+
+    const { fn: enqueueWakeup, calls: wakeupCalls } = makeMockEnqueueWakeup();
+    const recovery = recoveryService(db, { enqueueWakeup });
+    const result = await recovery.reconcileFrozenBlockedDependents();
+
+    expect(result.repaired).toBe(0);
+    expect(result.skipped).toBe(1);
+
+    const row = await db
+      .select({ status: issues.status })
+      .from(issues)
+      .where(eq(issues.id, dependentId))
+      .then((rows) => rows[0]);
+    expect(row?.status).toBe("blocked");
+
+    // Live blocker edge must still exist — the sweeper must not have wiped it.
+    const edges = await db
+      .select({ issueId: issueRelations.issueId })
+      .from(issueRelations)
+      .where(eq(issueRelations.relatedIssueId, dependentId));
+    const edgeIds = edges.map((e) => e.issueId);
+    expect(edgeIds).toContain(liveBlockerId);
+
     expect(wakeupCalls).toHaveLength(0);
   });
 });
