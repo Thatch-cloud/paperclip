@@ -39,6 +39,7 @@ const SENSITIVE_KEYS = new Set<string>([
   "sessiontoken",
   "private_key",
   "privatekey",
+  "value",
 ]);
 
 const MAX_DEPTH = 6;
