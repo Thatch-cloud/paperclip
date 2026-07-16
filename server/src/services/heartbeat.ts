@@ -9021,6 +9021,52 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // finalize=failed from the catch path below.
         adapterFinalizeOutcome = status;
       };
+      let workspaceFinalizeDependentWakesEvaluated = false;
+      const fireWorkspaceFinalizeDependentWakes = async () => {
+        if (!issueId || adapterFinalizeOutcome !== "succeeded" || workspaceFinalizeDependentWakesEvaluated) return;
+        try {
+          const blockerIssueStatus = await db
+            .select({ status: issues.status })
+            .from(issues)
+            .where(eq(issues.id, issueId))
+            .then((rows) => rows[0]?.status ?? null);
+          if (blockerIssueStatus === "done") {
+            const dependents = await issuesSvc.resolveBlockedDependents(issueId, { issueId });
+            for (const dependent of dependents) {
+              await enqueueWakeup(dependent.assigneeAgentId, {
+                source: "automation",
+                triggerDetail: "system",
+                reason: "issue_blockers_resolved",
+                payload: {
+                  issueId: dependent.id,
+                  resolvedBlockerIssueId: issueId,
+                  blockerIssueIds: dependent.blockerIssueIds,
+                  deferredFor: "workspace_finalize",
+                },
+                contextSnapshot: {
+                  issueId: dependent.id,
+                  taskId: dependent.id,
+                  wakeReason: "issue_blockers_resolved",
+                  source: "workspace.finalize",
+                  resolvedBlockerIssueId: issueId,
+                  blockerIssueIds: dependent.blockerIssueIds,
+                },
+              }).catch((wakeErr) => {
+                logger.warn(
+                  { err: wakeErr, issueId, dependentIssueId: dependent.id, agentId: dependent.assigneeAgentId },
+                  "failed to fire deferred dependent wake after workspace_finalize",
+                );
+              });
+            }
+          }
+          workspaceFinalizeDependentWakesEvaluated = true;
+        } catch (finalizeWakeErr) {
+          logger.warn(
+            { err: finalizeWakeErr, runId: run.id, issueId },
+            "failed to evaluate dependent wakes after workspace_finalize",
+          );
+        }
+      };
 
       let adapterResult: Awaited<ReturnType<typeof adapter.execute>>;
       try {
@@ -9056,6 +9102,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // rather than silently leaving dependents stranded behind a missing
         // finalize row.
         await recordWorkspaceFinalize("succeeded");
+        // If the adapter marked its issue done mid-run, unblock dependents before
+        // this heartbeat run becomes terminal so status-based waiters never see a
+        // succeeded blocker run with stale blocker edges still attached.
+        await fireWorkspaceFinalizeDependentWakes();
       } catch (adapterErr) {
         // Adapter (or its restore finally) threw — or the finalize record
         // write itself threw. Either way the workspace may be in a partial
@@ -9336,49 +9386,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         // mid-run (so the original `issue_blockers_resolved` wake was gated by
         // the readiness check waiting for workspace_finalize), the finalize
         // row we just recorded now lets dependents proceed. Fire wakes here.
-        if (issueId && adapterFinalizeOutcome === "succeeded") {
-          try {
-            const blockerIssueStatus = await db
-              .select({ status: issues.status })
-              .from(issues)
-              .where(eq(issues.id, issueId))
-              .then((rows) => rows[0]?.status ?? null);
-            if (blockerIssueStatus === "done") {
-              const dependents = await issuesSvc.resolveBlockedDependents(issueId, { issueId });
-              for (const dependent of dependents) {
-                await enqueueWakeup(dependent.assigneeAgentId, {
-                  source: "automation",
-                  triggerDetail: "system",
-                  reason: "issue_blockers_resolved",
-                  payload: {
-                    issueId: dependent.id,
-                    resolvedBlockerIssueId: issueId,
-                    blockerIssueIds: dependent.blockerIssueIds,
-                    deferredFor: "workspace_finalize",
-                  },
-                  contextSnapshot: {
-                    issueId: dependent.id,
-                    taskId: dependent.id,
-                    wakeReason: "issue_blockers_resolved",
-                    source: "workspace.finalize",
-                    resolvedBlockerIssueId: issueId,
-                    blockerIssueIds: dependent.blockerIssueIds,
-                  },
-                }).catch((wakeErr) => {
-                  logger.warn(
-                    { err: wakeErr, issueId, dependentIssueId: dependent.id, agentId: dependent.assigneeAgentId },
-                    "failed to fire deferred dependent wake after workspace_finalize",
-                  );
-                });
-              }
-            }
-          } catch (finalizeWakeErr) {
-            logger.warn(
-              { err: finalizeWakeErr, runId: run.id, issueId },
-              "failed to evaluate dependent wakes after workspace_finalize",
-            );
-          }
-        }
+        await fireWorkspaceFinalizeDependentWakes();
       }
 
       if (finalizedRun) {
