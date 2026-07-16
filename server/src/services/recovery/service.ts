@@ -4007,10 +4007,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return result;
   }
 
-  // Bounded stock sweep: find already-frozen blocked dependents whose
-  // blockers are all done and re-arm them. This covers issues that became
-  // stuck before the real-time repair paths were deployed, or any case where
-  // the normal `issue_blockers_resolved` wake was missed.
+  // Startup/periodic sweep: find already-frozen blocked dependents whose blockers
+  // are all done and re-arm them. Scoped to opts.companyId when provided;
+  // otherwise scans all tenants. Capped at 500 candidates per call to bound
+  // the scan on large deployments.
   async function reconcileFrozenBlockedDependents(opts?: { companyId?: string }) {
     const candidates = await db
       .select({
@@ -4025,7 +4025,8 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           eq(issues.status, "blocked"),
           sql`${issues.assigneeAgentId} IS NOT NULL`,
         ),
-      );
+      )
+      .limit(500);
 
     const result = {
       repaired: 0,
@@ -4075,11 +4076,19 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         }
 
         try {
-          // Clear resolved blocker edges and move issue to todo.
-          await issuesSvc.update(candidate.id, {
-            blockedByIssueIds: [],
-            status: "todo",
-          });
+          // Re-check readiness inside a FOR UPDATE transaction and clear only
+          // the stale edges atomically. If a concurrent blocker was inserted
+          // between the outer readiness check and this call, the tx re-reads
+          // under lock and returns false — no spurious unblock or wakeup.
+          const repaired = await issuesSvc.clearResolvedBlockerFromDependent(
+            candidate.id,
+            readiness.blockerIssueIds[0],
+          );
+
+          if (!repaired) {
+            result.skipped += 1;
+            continue;
+          }
 
           await deps.enqueueWakeup(agentId, {
             source: "automation",
