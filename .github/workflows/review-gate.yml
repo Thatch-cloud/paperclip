@@ -10,13 +10,13 @@ name: review-gate
 # The reviewer adds this block to the PR body (markers required):
 #
 #   <!-- paperclip-review:start -->
-#   - Issue: THA-1806
+#   - Issue: THA-1807
 #   - Author-agent: grace
 #   - Reviewer-agent: tim
 #   - Decision: approved
 #   - Head-sha: <full 40-char sha of the commit reviewed>
 #   - Open-findings-reconciled: none
-#   - Paperclip-review: /THA/issues/THA-1806#comment-1234
+#   - Paperclip-review: /THA/issues/THA-1807#comment-1234
 #   <!-- paperclip-review:end -->
 #
 # Gate passes only when the block is present and well-formed, Decision is
