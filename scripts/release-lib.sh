@@ -270,15 +270,26 @@ is_npm_tlog_duplicate_error() {
     grep -q "equivalent entry already exists in the transparency log" <<< "$output"
 }
 
+npm_trusted_publishing_available() {
+  [ "${GITHUB_ACTIONS:-}" = "true" ] &&
+    [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] &&
+    [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]
+}
+
 publish_package_to_npm() {
   local dist_tag="$1"
   local package_name="$2"
   local package_version="$3"
   local publish_log
+  local publish_args=(publish --no-git-checks --tag "$dist_tag" --access public)
+
+  if npm_trusted_publishing_available; then
+    publish_args+=(--provenance)
+  fi
 
   publish_log="$(mktemp "${TMPDIR:-/tmp}/paperclip-npm-publish.XXXXXX")"
 
-  if (set -o pipefail; pnpm publish --no-git-checks --tag "$dist_tag" --access public 2>&1 | tee "$publish_log"); then
+  if (set -o pipefail; pnpm "${publish_args[@]}" 2>&1 | tee "$publish_log"); then
     rm -f "$publish_log"
     return 0
   fi
@@ -370,7 +381,7 @@ require_npm_publish_auth() {
     return
   fi
 
-  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  if npm_trusted_publishing_available; then
     release_info "  ✓ npm publish auth will be provided by GitHub Actions trusted publishing"
     return
   fi

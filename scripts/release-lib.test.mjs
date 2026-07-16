@@ -11,7 +11,13 @@ function writeExecutable(path, body) {
   writeFileSync(path, body, { mode: 0o755 });
 }
 
-function runPublishHelper({ pnpmMode, npmVersionExists = false, distTag = "canary", callerPipefail = true }) {
+function runPublishHelper({
+  pnpmMode,
+  npmVersionExists = false,
+  distTag = "canary",
+  callerPipefail = true,
+  trustedPublishing = false,
+}) {
   const fixtureDir = mkdtempSync(join(tmpdir(), "paperclip-release-lib-"));
   const binDir = join(fixtureDir, "bin");
   const stateDir = join(fixtureDir, "state");
@@ -95,6 +101,9 @@ publish_package_to_npm ${distTag} @paperclipai/example 1.2.3
         NPM_VERSION_EXISTS: npmVersionExists ? "true" : "false",
         PNPM_MODE: pnpmMode,
         REPO_ROOT: fixtureDir,
+        GITHUB_ACTIONS: trustedPublishing ? "true" : "",
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: trustedPublishing ? "token" : "",
+        ACTIONS_ID_TOKEN_REQUEST_URL: trustedPublishing ? "https://example.invalid/oidc" : "",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -117,6 +126,13 @@ test("publish_package_to_npm returns after a successful pnpm publish", () => {
   assert.match(result.calls, /^pnpm publish --no-git-checks --tag canary --access public$/m);
   assert.doesNotMatch(result.calls, /npm view/);
   assert.doesNotMatch(result.calls, /--provenance=false/);
+});
+
+test("publish_package_to_npm enables provenance when GitHub Actions OIDC is available", () => {
+  const result = runPublishHelper({ pnpmMode: "success", trustedPublishing: true });
+
+  assert.equal(result.status, 0);
+  assert.match(result.calls, /^pnpm publish --no-git-checks --tag canary --access public --provenance$/m);
 });
 
 test("publish_package_to_npm retries duplicate tlog failures without provenance", () => {
