@@ -7587,6 +7587,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return recovery.reconcileStrandedAssignedIssues();
   }
 
+  async function reconcileFrozenBlockedDependents(opts?: { companyId?: string }) {
+    return recovery.reconcileFrozenBlockedDependents(opts);
+  }
+
   async function sweepStaleIssueLocks() {
     return recovery.sweepStaleIssueLocks();
   }
@@ -11506,6 +11510,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     },
 
     reconcileStrandedAssignedIssues,
+
+    reconcileFrozenBlockedDependents,
 
     sweepStaleIssueLocks,
 
