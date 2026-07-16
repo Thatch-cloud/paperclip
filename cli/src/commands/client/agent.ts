@@ -778,7 +778,11 @@ export function registerAgentCommands(program: Command): void {
 
           const now = new Date().toISOString().replaceAll(":", "-");
           const keyName = opts.keyName?.trim() ? opts.keyName.trim() : `local-cli-${now}`;
-          const key = await ctx.api.post<CreatedAgentKey>(apiPath`/api/agents/${agentRow.id}/keys`, { name: keyName });
+          const key = await ctx.api.post<CreatedAgentKey>(apiPath`/api/agents/${agentRow.id}/keys`, {
+            name: keyName,
+            scopes: ["read", "write"],
+            expiresAt: defaultAgentKeyExpiresAt(),
+          });
           if (!key) {
             throw new Error("Failed to create API key");
           }
@@ -849,6 +853,12 @@ export function registerAgentCommands(program: Command): void {
       }),
     { includeCompany: false },
   );
+}
+
+function defaultAgentKeyExpiresAt() {
+  const expiresAt = new Date();
+  expiresAt.setUTCFullYear(expiresAt.getUTCFullYear() + 1);
+  return expiresAt.toISOString();
 }
 
 function parseJsonObject(value: string | undefined): Record<string, unknown> | undefined {

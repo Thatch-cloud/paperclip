@@ -14,6 +14,9 @@ interface AgentTokenOptions extends BaseClientOptions {
   companyId?: string;
   agent?: string;
   name?: string;
+  scope?: string[];
+  expiresAt?: string;
+  ttlDays?: string;
 }
 
 interface BoardTokenOptions extends BaseClientOptions {
@@ -28,6 +31,8 @@ interface CreatedAgentKey {
   id: string;
   name: string;
   token: string;
+  scopes: string[] | null;
+  expiresAt: string | null;
   createdAt: string;
 }
 
@@ -35,6 +40,8 @@ interface AgentKeyRow {
   id: string;
   name: string;
   createdAt: string;
+  scopes?: string[] | null;
+  expiresAt?: string | null;
   lastUsedAt?: string | null;
   revokedAt?: string | null;
 }
@@ -69,11 +76,18 @@ export function registerTokenCommands(program: Command): void {
       .requiredOption("-C, --company-id <id>", "Company ID")
       .requiredOption("--agent <agent>", "Agent ID, shortname, or unambiguous name")
       .option("--name <name>", "API key label", "cli-agent")
+      .option("--scope <scope...>", "Agent key scopes: read and/or write", ["read", "write"])
+      .option("--expires-at <iso>", "Expiry timestamp for the agent key")
+      .option("--ttl-days <days>", "Agent key lifetime in days", "365")
       .action(async (opts: AgentTokenOptions) => {
         try {
           const ctx = resolveCommandContext(opts, { requireCompany: true });
           const agentRow = await resolveAgent(ctx.api, ctx.companyId ?? "", opts.agent ?? "");
-          const payload = createAgentKeySchema.parse({ name: opts.name });
+          const payload = createAgentKeySchema.parse({
+            name: opts.name,
+            scopes: opts.scope,
+            expiresAt: opts.expiresAt ?? expiresAtFromTtlDays(opts.ttlDays),
+          });
           const key = await ctx.api.post<CreatedAgentKey>(apiPath`/api/agents/${agentRow.id}/keys`, payload);
           if (!key) throw new Error("Failed to create agent API key");
           printOutput(
@@ -108,7 +122,7 @@ export function registerTokenCommands(program: Command): void {
             return;
           }
           for (const key of keys) {
-            console.log(formatInlineRecord({ id: key.id, name: key.name, createdAt: key.createdAt, revokedAt: key.revokedAt ?? null }));
+            console.log(formatInlineRecord({ id: key.id, name: key.name, scopes: key.scopes ?? null, expiresAt: key.expiresAt ?? null, createdAt: key.createdAt, revokedAt: key.revokedAt ?? null }));
           }
           if (keys.length === 0) printOutput([], { json: false });
         } catch (err) {
@@ -212,6 +226,15 @@ export function registerTokenCommands(program: Command): void {
         }
       }),
   );
+}
+
+function expiresAtFromTtlDays(rawTtlDays: string | undefined) {
+  const ttlDays = Number(rawTtlDays ?? "365");
+  if (!Number.isFinite(ttlDays) || ttlDays <= 0) {
+    throw new Error("--ttl-days must be a positive number");
+  }
+  const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+  return expiresAt.toISOString();
 }
 
 async function resolveAgent(api: { get<T>(path: string): Promise<T | null> }, companyId: string, agentRef: string): Promise<Agent> {

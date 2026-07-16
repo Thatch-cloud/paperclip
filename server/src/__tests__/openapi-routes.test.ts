@@ -150,7 +150,10 @@ describe("openapi routes", () => {
       type: "object",
       properties: {
         name: { type: "string" },
+        scopes: { type: "array", items: { type: "string", enum: ["read", "write"] } },
+        expiresAt: { type: "string", format: "date-time" },
       },
+      required: ["scopes", "expiresAt"],
     });
   });
 
