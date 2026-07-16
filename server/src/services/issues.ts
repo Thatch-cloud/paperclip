@@ -131,20 +131,33 @@ async function expirePendingInteractionsForTerminalIssue(
   actor: { agentId?: string | null; userId?: string | null },
 ) {
   const now = new Date();
+  const baseSet = {
+    status: "expired",
+    resolvedByAgentId: actor.agentId ?? null,
+    resolvedByUserId: actor.userId ?? null,
+    resolvedAt: now,
+    updatedAt: now,
+  } as const;
+  const pendingOnIssue = and(
+    eq(issueThreadInteractions.companyId, issue.companyId),
+    eq(issueThreadInteractions.issueId, issue.id),
+    eq(issueThreadInteractions.status, "pending"),
+  );
+
   await dbOrTx
     .update(issueThreadInteractions)
-    .set({
-      status: "expired",
-      resolvedByAgentId: actor.agentId ?? null,
-      resolvedByUserId: actor.userId ?? null,
-      resolvedAt: now,
-      updatedAt: now,
-    })
-    .where(and(
-      eq(issueThreadInteractions.companyId, issue.companyId),
-      eq(issueThreadInteractions.issueId, issue.id),
-      eq(issueThreadInteractions.status, "pending"),
-    ));
+    .set({ ...baseSet, result: { version: 1, outcome: "issue_terminal" } })
+    .where(and(pendingOnIssue, inArray(issueThreadInteractions.kind, ["request_confirmation", "request_checkbox_confirmation"])));
+
+  await dbOrTx
+    .update(issueThreadInteractions)
+    .set({ ...baseSet, result: { version: 1, answers: [], cancelled: true, cancellationReason: "Issue reached terminal status" } })
+    .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, "ask_user_questions")));
+
+  await dbOrTx
+    .update(issueThreadInteractions)
+    .set({ ...baseSet, result: { version: 1 } })
+    .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, "suggest_tasks")));
 }
 
 function readStringFromRecord(record: unknown, key: string) {
