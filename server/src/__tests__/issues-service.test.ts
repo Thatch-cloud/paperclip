@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import {
   activityLog,
@@ -3455,6 +3455,138 @@ describeEmbeddedPostgres("issueService blockers and dependency wake readiness", 
       ],
       childIssueSummaryTruncated: false,
     });
+  });
+
+  it("resolveBlockedDependents clears the blocker edge and moves a blocked dependent to todo", async () => {
+    const companyId = randomUUID();
+    const assigneeAgentId = randomUUID();
+    const blockerId = randomUUID();
+    const dependentId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: assigneeAgentId,
+      companyId,
+      name: "Worker",
+      role: "engineer",
+      status: "active",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: { heartbeat: { wakeOnDemand: true } },
+      permissions: {},
+    });
+    await db.insert(issues).values([
+      { id: blockerId, companyId, title: "Blocker", status: "done", priority: "medium" },
+      {
+        id: dependentId,
+        companyId,
+        title: "Dependent",
+        status: "blocked",
+        priority: "medium",
+        assigneeAgentId,
+      },
+    ]);
+    await db.insert(issueRelations).values({
+      companyId,
+      issueId: blockerId,
+      relatedIssueId: dependentId,
+      type: "blocks",
+    });
+
+    const dependents = await svc.resolveBlockedDependents(blockerId);
+
+    expect(dependents).toHaveLength(1);
+    expect(dependents[0]).toMatchObject({ id: dependentId, status: "blocked" });
+
+    const updatedDependent = await db
+      .select({ status: issues.status })
+      .from(issues)
+      .where(eq(issues.id, dependentId))
+      .then((rows) => rows[0] ?? null);
+    expect(updatedDependent?.status).toBe("todo");
+
+    const remainingEdges = await db
+      .select()
+      .from(issueRelations)
+      .where(eq(issueRelations.relatedIssueId, dependentId));
+    expect(remainingEdges).toHaveLength(0);
+  });
+
+  it("resolveBlockedDependents: re-verify under lock skips dependent when a concurrent unresolved blocker is added after readiness check", async () => {
+    // Set up: D blocked only by A (done)
+    const companyId = randomUUID();
+    const assigneeAgentId = randomUUID();
+    const resolvedBlockerId = randomUUID();
+    const dependentId = randomUUID();
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: assigneeAgentId,
+      companyId,
+      name: "Worker",
+      role: "engineer",
+      status: "active",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: { heartbeat: { wakeOnDemand: true } },
+      permissions: {},
+    });
+    await db.insert(issues).values([
+      { id: resolvedBlockerId, companyId, title: "Done blocker", status: "done", priority: "medium" },
+      { id: dependentId, companyId, title: "Dependent", status: "blocked", priority: "medium", assigneeAgentId },
+    ]);
+    await db.insert(issueRelations).values({
+      companyId, issueId: resolvedBlockerId, relatedIssueId: dependentId, type: "blocks",
+    });
+
+    // Intercept listWakeableBlockedDependents to inject a concurrent unresolved blocker
+    // AFTER the readiness check returns (simulating the race window).
+    const unresolvedBlockerId = randomUUID();
+    await db.insert(issues).values({
+      id: unresolvedBlockerId, companyId, title: "Concurrent blocker", status: "todo", priority: "medium",
+    });
+
+    const originalList = svc.listWakeableBlockedDependents.bind(svc);
+    const listSpy = vi.spyOn(svc, "listWakeableBlockedDependents").mockImplementationOnce(async (blockerIssueId) => {
+      const result = await originalList(blockerIssueId);
+      // Simulate: concurrent unresolved blocker committed between the readiness check and the repair
+      await db.insert(issueRelations).values({
+        companyId, issueId: unresolvedBlockerId, relatedIssueId: dependentId, type: "blocks",
+      });
+      return result;
+    });
+
+    const resolved = await svc.resolveBlockedDependents(resolvedBlockerId);
+
+    // With re-verify under lock: D had an unresolved blocker at repair time → skipped → not cleared
+    expect(resolved).toHaveLength(0);
+
+    // The unresolved blocker edge must still be present
+    const edges = await db
+      .select({ issueId: issueRelations.issueId })
+      .from(issueRelations)
+      .where(eq(issueRelations.relatedIssueId, dependentId));
+    expect(edges.map((e) => e.issueId)).toContain(unresolvedBlockerId);
+    // The resolved blocker's edge was also not deleted (repair aborted entirely for this candidate)
+    expect(edges.map((e) => e.issueId)).toContain(resolvedBlockerId);
+
+    // D must still be blocked (re-verify prevented the status update)
+    const dependent = await db
+      .select({ status: issues.status })
+      .from(issues)
+      .where(eq(issues.id, dependentId))
+      .then((rows) => rows[0] ?? null);
+    expect(dependent?.status).toBe("blocked");
+
+    listSpy.mockRestore();
   });
 });
 

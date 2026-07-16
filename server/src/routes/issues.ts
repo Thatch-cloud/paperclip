@@ -5735,19 +5735,8 @@ export function issueRoutes(
 
       const becameDone = existing.status !== "done" && issue.status === "done";
       if (becameDone) {
-        const dependents = await svc.listWakeableBlockedDependents(issue.id);
+        const dependents = await svc.resolveBlockedDependents(issue.id, { issueId: issue.id });
         for (const dependent of dependents) {
-          try {
-            await svc.update(dependent.id, {
-              blockedByIssueIds: [],
-              ...(dependent.status === "blocked" ? { status: "todo" } : {}),
-            });
-          } catch (err) {
-            logger.warn(
-              { err, issueId: issue.id, dependentIssueId: dependent.id },
-              "failed to clear resolved issue blockers before wake",
-            );
-          }
           addWakeup(dependent.assigneeAgentId, {
             source: "automation",
             triggerDetail: "system",
@@ -5808,7 +5797,7 @@ export function issueRoutes(
           .wakeup(agentId, wakeup)
           .catch((err) => logger.warn({ err, issueId: issue.id, agentId }, "failed to wake agent on issue update"));
       }
-    })();
+    })().catch((err) => logger.warn({ err, issueId: issue.id }, "background wakeup processing failed on issue update"));
 
     res.json({ ...issueResponse, comment });
   });
@@ -7107,19 +7096,8 @@ export function issueRoutes(
 
       const becameDone = issueBeforeCommentDecision.status !== "done" && currentIssue.status === "done";
       if (becameDone) {
-        const dependents = await svc.listWakeableBlockedDependents(currentIssue.id);
+        const dependents = await svc.resolveBlockedDependents(currentIssue.id, { issueId: currentIssue.id });
         for (const dependent of dependents) {
-          try {
-            await svc.update(dependent.id, {
-              blockedByIssueIds: [],
-              ...(dependent.status === "blocked" ? { status: "todo" } : {}),
-            });
-          } catch (err) {
-            logger.warn(
-              { err, issueId: currentIssue.id, dependentIssueId: dependent.id },
-              "failed to clear resolved issue blockers before wake",
-            );
-          }
           addWakeup(dependent.assigneeAgentId, {
             source: "automation",
             triggerDetail: "system",
@@ -7181,7 +7159,7 @@ export function issueRoutes(
           .wakeup(agentId, wakeup)
           .catch((err) => logger.warn({ err, issueId: currentIssue.id, agentId }, "failed to wake agent on issue comment"));
       }
-    })();
+    })().catch((err) => logger.warn({ err, issueId: currentIssue.id }, "background wakeup processing failed on issue comment"));
 
     res.status(201).json(comment);
   });

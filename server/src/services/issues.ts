@@ -3670,14 +3670,18 @@ export function issueService(db: Db) {
       throw unprocessable("Issue cannot be blocked by itself");
     }
 
+    // Always lock the dependent issue row first — even in the clear-to-empty case —
+    // so that a concurrent blocker INSERT cannot commit between the readiness check
+    // and this delete, silently removing a blocker that was just added.
+    const lockedIssueIds = [issueId, ...deduped].sort();
+    await dbOrTx.execute(
+      sql`SELECT ${issues.id} FROM ${issues}
+          WHERE ${and(eq(issues.companyId, companyId), inArray(issues.id, lockedIssueIds))}
+          ORDER BY ${issues.id}
+          FOR UPDATE`,
+    );
+
     if (deduped.length > 0) {
-      const lockedIssueIds = [issueId, ...deduped].sort();
-      await dbOrTx.execute(
-        sql`SELECT ${issues.id} FROM ${issues}
-            WHERE ${and(eq(issues.companyId, companyId), inArray(issues.id, lockedIssueIds))}
-            ORDER BY ${issues.id}
-            FOR UPDATE`,
-      );
       const relatedIssues = await dbOrTx
         .select({ id: issues.id })
         .from(issues)
@@ -3977,7 +3981,7 @@ export function issueService(db: Db) {
     });
   }
 
-  return {
+  const svc = {
     clearExecutionRunIfTerminal,
     clearCheckoutRunIfTerminal,
 
@@ -4484,6 +4488,61 @@ export function issueService(db: Db) {
           status: candidate.status,
           blockerIssueIds: readiness.blockerIssueIds,
         }));
+    },
+
+    resolveBlockedDependents: async (blockerIssueId: string, logContext: Record<string, unknown> = {}) => {
+      const candidates = await svc.listWakeableBlockedDependents(blockerIssueId);
+      const resolved: typeof candidates = [];
+      for (const candidate of candidates) {
+        try {
+          const cleared = await db.transaction(async (tx) => {
+            // Lock the dependent row before any read or delete so that a concurrent
+            // blocker INSERT cannot slip in after the outer readiness check.
+            const locked = await tx
+              .select({ status: issues.status, companyId: issues.companyId })
+              .from(issues)
+              .where(eq(issues.id, candidate.id))
+              .for("update")
+              .then((rows) => rows[0] ?? null);
+            if (!locked) return false;
+
+            // Re-verify readiness inside the lock: if a concurrent blocker was added
+            // after listWakeableBlockedDependents ran, it will appear here and we abort
+            // rather than silently deleting an edge that was just added.
+            const readinessMap = await listIssueDependencyReadinessMap(
+              tx,
+              locked.companyId,
+              [candidate.id],
+            );
+            const readiness = readinessMap.get(candidate.id);
+            if (!readiness?.isDependencyReady) return false;
+
+            await tx
+              .delete(issueRelations)
+              .where(
+                and(
+                  eq(issueRelations.companyId, locked.companyId),
+                  eq(issueRelations.relatedIssueId, candidate.id),
+                  eq(issueRelations.type, "blocks"),
+                ),
+              );
+            if (locked.status === "blocked") {
+              await tx
+                .update(issues)
+                .set({ status: "todo", updatedAt: new Date() })
+                .where(eq(issues.id, candidate.id));
+            }
+            return true;
+          });
+          if (cleared) resolved.push(candidate);
+        } catch (err) {
+          logger.warn(
+            { err, ...logContext, blockerIssueId, dependentIssueId: candidate.id },
+            "failed to clear resolved issue blockers before wake",
+          );
+        }
+      }
+      return resolved;
     },
 
     getWakeableParentAfterChildCompletion: async (parentIssueId: string) => {
@@ -6561,4 +6620,5 @@ export function issueService(db: Db) {
       }));
     },
   };
+  return svc;
 }
