@@ -98,6 +98,95 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     return { companyId, goalId, issueId };
   }
 
+  it("expires pending interactions when an issue becomes terminal without touching active issues", async () => {
+    const companyId = randomUUID();
+    const goalId = randomUUID();
+    const terminalIssueId = randomUUID();
+    const activeStatuses = ["backlog", "todo", "in_progress", "in_review", "blocked"] as const;
+    const activeIssueIds = activeStatuses.map(() => randomUUID());
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false });
+    await db.insert(goals).values({
+      id: goalId,
+      companyId,
+      title: "Terminal interaction cleanup",
+      level: "task",
+      status: "active",
+    });
+
+    await db.insert(issues).values([
+      {
+        id: terminalIssueId,
+        companyId,
+        goalId,
+        title: "Issue going terminal",
+        status: "in_progress",
+        priority: "medium",
+      },
+      ...activeStatuses.map((status, index) => ({
+        id: activeIssueIds[index]!,
+        companyId,
+        goalId,
+        title: `Active issue ${status}`,
+        status,
+        priority: "medium",
+      })),
+    ]);
+    const payload = {
+      version: 1 as const,
+      tasks: [{ clientKey: "task", title: "Follow-up" }],
+    };
+    await db.insert(issueThreadInteractions).values([
+      {
+        companyId,
+        issueId: terminalIssueId,
+        kind: "suggest_tasks",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        payload,
+      },
+      {
+        companyId,
+        issueId: terminalIssueId,
+        kind: "suggest_tasks",
+        status: "accepted",
+        continuationPolicy: "wake_assignee",
+        payload,
+      },
+      ...activeIssueIds.map((issueId) => ({
+        companyId,
+        issueId,
+        kind: "suggest_tasks",
+        status: "pending",
+        continuationPolicy: "wake_assignee",
+        payload,
+      })),
+    ]);
+
+    await issuesSvc.update(terminalIssueId, {
+      status: "done",
+      actorAgentId: null,
+      actorUserId: null,
+    });
+
+    const rows = await db
+      .select({ issueId: issueThreadInteractions.issueId, status: issueThreadInteractions.status })
+      .from(issueThreadInteractions)
+      .orderBy(issueThreadInteractions.issueId, issueThreadInteractions.status);
+    const terminalRows = rows.filter((row) => row.issueId === terminalIssueId);
+    const activeRows = rows.filter((row) => activeIssueIds.includes(row.issueId));
+
+    expect(terminalRows.map((row) => row.status).sort()).toEqual(["accepted", "expired"]);
+    expect(activeRows).toHaveLength(activeStatuses.length);
+    expect(activeRows.every((row) => row.status === "pending")).toBe(true);
+  });
+
   it("accepts suggested tasks by creating a rooted issue tree under the current issue", async () => {
     const companyId = randomUUID();
     const goalId = randomUUID();
