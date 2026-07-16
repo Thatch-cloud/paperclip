@@ -2695,6 +2695,7 @@ export async function buildPaperclipWakePayload(input: {
     : [];
 
   return {
+    serverTimeUtc: new Date().toISOString(),
     reason: readNonEmptyString(input.contextSnapshot.wakeReason),
     issue: issueSummary
       ? {

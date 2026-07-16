@@ -283,6 +283,8 @@ describe.sequential("issue goal context routes", () => {
     );
 
     expect(res.status).toBe(200);
+    expect(res.body.serverTimeUtc).toEqual(expect.any(String));
+    expect(Number.isNaN(Date.parse(res.body.serverTimeUtc))).toBe(false);
     expect(res.body.issue.goalId).toBe(projectGoal.id);
     expect(res.body.issue.workMode).toBe("planning");
     expect(res.body.goal).toEqual(

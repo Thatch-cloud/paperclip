@@ -425,6 +425,7 @@ type PaperclipWakeTreeHoldSummary = {
 };
 
 type PaperclipWakePayload = {
+  serverTimeUtc: string | null;
   reason: string | null;
   issue: PaperclipWakeIssue | null;
   checkedOutByHarness: boolean;
@@ -636,6 +637,7 @@ export function normalizePaperclipWakePayload(value: unknown): PaperclipWakePayl
   }
 
   return {
+    serverTimeUtc: asString(payload.serverTimeUtc, "").trim() || null,
     reason: asString(payload.reason, "").trim() || null,
     issue: normalizePaperclipWakeIssue(payload.issue),
     checkedOutByHarness: asBoolean(payload.checkedOutByHarness, false),
@@ -701,6 +703,7 @@ export function renderPaperclipWakePrompt(
         "Fetch the API thread only when `fallbackFetchNeeded` is true or you need broader history than this batch.",
         "",
         "Execution contract: take concrete action in this heartbeat when the issue is actionable; do not stop at a plan unless planning was requested. Leave durable progress and then give the issue a clear final disposition before ending the heartbeat: `done`, `in_review` with a real reviewer/approval/interaction path, `blocked` with first-class blockers or a named unblock owner/action, delegated follow-up issues with blockers, or `in_progress` only when a live continuation path exists. Use child issues for long or parallel delegated work instead of polling. Comments, documents, screenshots, work products, and `Remaining` bullets are evidence, not valid liveness paths by themselves.",
+        "Time semantics: use `serverTimeUtc` for all freshness/staleness comparisons. Compare UTC-to-UTC; do not compare API timestamps against the local injected date. `live-runs: []` does not prove a future scheduled retry is dead; a scheduled retry is not live until its `scheduledRetryAt` time is due.",
         "",
         `- reason: ${normalized.reason ?? "unknown"}`,
         `- issue: ${normalized.issue?.identifier ?? normalized.issue?.id ?? "unknown"}${normalized.issue?.title ? ` ${normalized.issue.title}` : ""}`,
@@ -718,6 +721,7 @@ export function renderPaperclipWakePrompt(
         "Only fetch the API thread when `fallbackFetchNeeded` is true or you need broader history than this batch.",
         "",
         "Execution contract: take concrete action in this heartbeat when the issue is actionable; do not stop at a plan unless planning was requested. Leave durable progress and then give the issue a clear final disposition before ending the heartbeat: `done`, `in_review` with a real reviewer/approval/interaction path, `blocked` with first-class blockers or a named unblock owner/action, delegated follow-up issues with blockers, or `in_progress` only when a live continuation path exists. Use child issues for long or parallel delegated work instead of polling. Comments, documents, screenshots, work products, and `Remaining` bullets are evidence, not valid liveness paths by themselves.",
+        "Time semantics: use `serverTimeUtc` for all freshness/staleness comparisons. Compare UTC-to-UTC; do not compare API timestamps against the local injected date. `live-runs: []` does not prove a future scheduled retry is dead; a scheduled retry is not live until its `scheduledRetryAt` time is due.",
         "",
         `- reason: ${normalized.reason ?? "unknown"}`,
         `- issue: ${normalized.issue?.identifier ?? normalized.issue?.id ?? "unknown"}${normalized.issue?.title ? ` ${normalized.issue.title}` : ""}`,
@@ -726,6 +730,9 @@ export function renderPaperclipWakePrompt(
         `- fallback fetch needed: ${normalized.fallbackFetchNeeded ? "yes" : "no"}`,
       ];
 
+  if (normalized.serverTimeUtc) {
+    lines.push(`- server time UTC: ${normalized.serverTimeUtc}`);
+  }
   if (normalized.issue?.status) {
     lines.push(`- issue status: ${normalized.issue.status}`);
   }
