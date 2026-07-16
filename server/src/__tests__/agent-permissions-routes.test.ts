@@ -518,7 +518,7 @@ describe.sequential("agent permission routes", () => {
 
     const res = await requestApp(app, (baseUrl) => request(baseUrl)
       .post(`/api/agents/${agentId}/keys`)
-      .send({ name: "backdoor" }));
+      .send({ name: "backdoor", scopes: ["read", "write"], expiresAt: "2027-01-01T00:00:00.000Z" }));
 
     expect(res.status).toBe(403);
   });
