@@ -187,6 +187,89 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     expect(activeRows.every((row) => row.status === "pending")).toBe(true);
   });
 
+  it("sets kind-appropriate results on interactions expired by terminal-issue transition", async () => {
+    const companyId = randomUUID();
+    const goalId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false });
+    await db.insert(goals).values({ id: goalId, companyId, title: "Results test", level: "task", status: "active" });
+    await db.insert(issues).values({ id: issueId, companyId, goalId, title: "Issue going terminal", status: "in_progress", priority: "medium" });
+
+    const suggestPayload = { version: 1 as const, tasks: [{ clientKey: "t", title: "Follow-up" }] };
+    const askPayload = {
+      version: 1 as const,
+      questions: [{ id: "q1", prompt: "Which?", selectionMode: "single" as const, options: [{ id: "o1", label: "A" }] }],
+    };
+    const confirmPayload = { version: 1 as const, prompt: "Confirm?" };
+    const checkboxPayload = {
+      version: 1 as const,
+      prompt: "Select?",
+      options: [{ id: "o1", label: "Option A" }],
+    };
+
+    await db.insert(issueThreadInteractions).values([
+      { companyId, issueId, kind: "suggest_tasks", status: "pending", continuationPolicy: "wake_assignee", payload: suggestPayload },
+      { companyId, issueId, kind: "ask_user_questions", status: "pending", continuationPolicy: "wake_assignee", payload: askPayload },
+      { companyId, issueId, kind: "request_confirmation", status: "pending", continuationPolicy: "none", payload: confirmPayload },
+      { companyId, issueId, kind: "request_checkbox_confirmation", status: "pending", continuationPolicy: "wake_assignee", payload: checkboxPayload },
+    ]);
+
+    await issuesSvc.update(issueId, { status: "done", actorAgentId: null, actorUserId: null });
+
+    const rows = await db
+      .select({ kind: issueThreadInteractions.kind, status: issueThreadInteractions.status, result: issueThreadInteractions.result })
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.issueId, issueId))
+      .orderBy(issueThreadInteractions.kind);
+
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      expect(row.status).toBe("expired");
+    }
+
+    const byKind = Object.fromEntries(rows.map((r) => [r.kind, r.result]));
+    expect(byKind["suggest_tasks"]).toMatchObject({ version: 1 });
+    expect(byKind["ask_user_questions"]).toMatchObject({ version: 1, answers: [], cancelled: true });
+    expect(byKind["request_confirmation"]).toMatchObject({ version: 1, outcome: "issue_terminal" });
+    expect(byKind["request_checkbox_confirmation"]).toMatchObject({ version: 1, outcome: "issue_terminal" });
+  });
+
+  it("expires pending interactions when an issue is cancelled", async () => {
+    const companyId = randomUUID();
+    const goalId = randomUUID();
+    const issueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: false });
+    await db.insert(goals).values({ id: goalId, companyId, title: "Cancelled expiry test", level: "task", status: "active" });
+    await db.insert(issues).values({ id: issueId, companyId, goalId, title: "Issue being cancelled", status: "in_progress", priority: "medium" });
+
+    const payload = { version: 1 as const, tasks: [{ clientKey: "t", title: "Follow-up" }] };
+    await db.insert(issueThreadInteractions).values({ companyId, issueId, kind: "suggest_tasks", status: "pending", continuationPolicy: "wake_assignee", payload });
+
+    await issuesSvc.update(issueId, { status: "cancelled", actorAgentId: null, actorUserId: null });
+
+    const rows = await db
+      .select({ status: issueThreadInteractions.status })
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.issueId, issueId));
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("expired");
+  });
+
   it("accepts suggested tasks by creating a rooted issue tree under the current issue", async () => {
     const companyId = randomUUID();
     const goalId = randomUUID();
