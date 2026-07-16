@@ -44,6 +44,8 @@ import type {
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
   IssueRelationIssueSummary,
+  IssueThreadInteractionKind,
+  IssueThreadInteractionResult,
   LowTrustBoundary,
   SuccessfulRunHandoffState,
 } from "@paperclipai/shared";
@@ -100,6 +102,17 @@ const ISSUE_COMMENT_RUN_LOG_DERIVATION_CHUNK_BYTES = 256_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_END_SLACK_MS = 60_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_MAX_PARALLEL_READS = 8;
 const DELETED_ISSUE_COMMENT_BODY = "";
+const TERMINAL_ISSUE_INTERACTION_EXPIRY_RESULTS = {
+  request_confirmation: { version: 1, outcome: "issue_terminal" },
+  request_checkbox_confirmation: { version: 1, outcome: "issue_terminal" },
+  ask_user_questions: { version: 1, answers: [], cancelled: true, cancellationReason: "Issue reached terminal status" },
+  suggest_tasks: { version: 1 },
+} satisfies Record<IssueThreadInteractionKind, IssueThreadInteractionResult>;
+
+const TERMINAL_ISSUE_INTERACTION_EXPIRY_ENTRIES = Object.entries(TERMINAL_ISSUE_INTERACTION_EXPIRY_RESULTS) as Array<[
+  IssueThreadInteractionKind,
+  IssueThreadInteractionResult,
+]>;
 function assertTransition(from: string, to: string) {
   if (from === to) return;
   if (!ALL_ISSUE_STATUSES.includes(to)) {
@@ -144,20 +157,12 @@ async function expirePendingInteractionsForTerminalIssue(
     eq(issueThreadInteractions.status, "pending"),
   );
 
-  await dbOrTx
-    .update(issueThreadInteractions)
-    .set({ ...baseSet, result: { version: 1, outcome: "issue_terminal" } })
-    .where(and(pendingOnIssue, inArray(issueThreadInteractions.kind, ["request_confirmation", "request_checkbox_confirmation"])));
-
-  await dbOrTx
-    .update(issueThreadInteractions)
-    .set({ ...baseSet, result: { version: 1, answers: [], cancelled: true, cancellationReason: "Issue reached terminal status" } })
-    .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, "ask_user_questions")));
-
-  await dbOrTx
-    .update(issueThreadInteractions)
-    .set({ ...baseSet, result: { version: 1 } })
-    .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, "suggest_tasks")));
+  for (const [kind, result] of TERMINAL_ISSUE_INTERACTION_EXPIRY_ENTRIES) {
+    await dbOrTx
+      .update(issueThreadInteractions)
+      .set({ ...baseSet, result })
+      .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, kind)));
+  }
 }
 
 function readStringFromRecord(record: unknown, key: string) {

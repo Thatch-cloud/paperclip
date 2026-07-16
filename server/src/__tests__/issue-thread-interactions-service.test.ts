@@ -21,6 +21,11 @@ import {
   workspaceOperations,
 } from "@paperclipai/db";
 import {
+  ISSUE_THREAD_INTERACTION_KINDS,
+  type IssueThreadInteractionKind,
+  type IssueThreadInteractionPayload,
+} from "@paperclipai/shared";
+import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
@@ -202,24 +207,30 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     await db.insert(goals).values({ id: goalId, companyId, title: "Results test", level: "task", status: "active" });
     await db.insert(issues).values({ id: issueId, companyId, goalId, title: "Issue going terminal", status: "in_progress", priority: "medium" });
 
-    const suggestPayload = { version: 1 as const, tasks: [{ clientKey: "t", title: "Follow-up" }] };
-    const askPayload = {
-      version: 1 as const,
-      questions: [{ id: "q1", prompt: "Which?", selectionMode: "single" as const, options: [{ id: "o1", label: "A" }] }],
-    };
-    const confirmPayload = { version: 1 as const, prompt: "Confirm?" };
-    const checkboxPayload = {
-      version: 1 as const,
-      prompt: "Select?",
-      options: [{ id: "o1", label: "Option A" }],
-    };
+    const payloadByKind = {
+      suggest_tasks: { version: 1, tasks: [{ clientKey: "t", title: "Follow-up" }] },
+      ask_user_questions: {
+        version: 1,
+        questions: [{ id: "q1", prompt: "Which?", selectionMode: "single", options: [{ id: "o1", label: "A" }] }],
+      },
+      request_confirmation: { version: 1, prompt: "Confirm?" },
+      request_checkbox_confirmation: {
+        version: 1,
+        prompt: "Select?",
+        options: [{ id: "o1", label: "Option A" }],
+      },
+    } satisfies Record<IssueThreadInteractionKind, IssueThreadInteractionPayload>;
 
-    await db.insert(issueThreadInteractions).values([
-      { companyId, issueId, kind: "suggest_tasks", status: "pending", continuationPolicy: "wake_assignee", payload: suggestPayload },
-      { companyId, issueId, kind: "ask_user_questions", status: "pending", continuationPolicy: "wake_assignee", payload: askPayload },
-      { companyId, issueId, kind: "request_confirmation", status: "pending", continuationPolicy: "none", payload: confirmPayload },
-      { companyId, issueId, kind: "request_checkbox_confirmation", status: "pending", continuationPolicy: "wake_assignee", payload: checkboxPayload },
-    ]);
+    await db.insert(issueThreadInteractions).values(
+      ISSUE_THREAD_INTERACTION_KINDS.map((kind) => ({
+        companyId,
+        issueId,
+        kind,
+        status: "pending",
+        continuationPolicy: kind === "request_confirmation" ? "none" : "wake_assignee",
+        payload: payloadByKind[kind],
+      })),
+    );
 
     await issuesSvc.update(issueId, { status: "done", actorAgentId: null, actorUserId: null });
 
@@ -229,7 +240,7 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       .where(eq(issueThreadInteractions.issueId, issueId))
       .orderBy(issueThreadInteractions.kind);
 
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(ISSUE_THREAD_INTERACTION_KINDS.length);
     for (const row of rows) {
       expect(row.status).toBe("expired");
     }
