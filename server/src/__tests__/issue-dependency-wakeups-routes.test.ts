@@ -227,20 +227,16 @@ describe("issue dependency wakeups in issue routes", () => {
       labels: [],
       labelIds: [],
     });
-    mockIssueService.listWakeableBlockedDependents.mockResolvedValue([
-      {
-        id: "issue-2",
-        assigneeAgentId: "agent-2",
-        status: "blocked",
-        blockerIssueIds: ["issue-1"],
-      },
-    ]);
-    mockIssueService.clearResolvedBlockerFromDependent.mockResolvedValue(false);
+    // resolveBlockedDependents returns [] — dependent still has a live blocker, repair skipped it
+    mockIssueService.resolveBlockedDependents.mockResolvedValue([]);
 
     const res = await request(await createApp()).patch("/api/issues/issue-1").send({ status: "done" });
     expect(res.status).toBe(200);
     await vi.waitFor(() => {
-      expect(mockIssueService.clearResolvedBlockerFromDependent).toHaveBeenCalledWith("issue-2", "issue-1");
+      expect(mockIssueService.resolveBlockedDependents).toHaveBeenCalledWith(
+        "issue-1",
+        expect.any(Object),
+      );
     });
     expect(mockWakeup).not.toHaveBeenCalledWith(
       "agent-2",
