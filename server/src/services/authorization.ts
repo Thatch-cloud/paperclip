@@ -958,7 +958,10 @@ export function authorizationService(db: Db) {
               explanation: "Allowed by active cloud tenant company membership.",
             });
           }
-          if (input.action === "issue:mutate" && membership.membershipRole !== "viewer") {
+          if (
+            (input.action === "issue:comment" || input.action === "issue:mutate") &&
+            membership.membershipRole !== "viewer"
+          ) {
             return allow({
               action: input.action,
               reason: "allow_company_member",
@@ -999,6 +1002,7 @@ export function authorizationService(db: Db) {
         if (
           input.action === "agent:read" ||
           input.action === "company_scope:read" ||
+          input.action === "issue:comment" ||
           input.action === "issue:read" ||
           input.action === "project:read" ||
           input.action === "runtime:manage" ||
@@ -1008,7 +1012,9 @@ export function authorizationService(db: Db) {
           // Mirroring the tasks:assign carve-out above, viewers keep the
           // read-only visibility actions but not the privileged ones.
           const requiresNonViewer =
-            input.action === "runtime:manage" || input.action === "secrets:read";
+            input.action === "issue:comment" ||
+            input.action === "runtime:manage" ||
+            input.action === "secrets:read";
           if (membership && (!requiresNonViewer || membership.membershipRole !== "viewer")) {
             return allow({
               action: input.action,

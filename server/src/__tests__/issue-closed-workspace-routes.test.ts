@@ -20,6 +20,12 @@ const mockExecutionWorkspaceService = vi.hoisted(() => ({
 
 const mockAccessService = vi.hoisted(() => ({
   canUser: vi.fn(),
+  decide: vi.fn(async () => ({
+    allowed: true,
+    action: "issue:comment",
+    explanation: "allowed by test mock",
+    reason: "allow_local_board",
+  })),
   hasPermission: vi.fn(),
 }));
 
