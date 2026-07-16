@@ -812,6 +812,11 @@ export async function startServer(): Promise<StartedServer> {
         logger.warn({ ...swept }, "startup stale-lock sweeper cleared issue locks");
       }
 
+      const frozenRepaired = await heartbeat.reconcileFrozenBlockedDependents();
+      if (frozenRepaired.repaired > 0) {
+        logger.warn({ ...frozenRepaired }, "startup frozen-blocked-dependent reconcile re-armed issues");
+      }
+
       const reviewed = await heartbeat.reconcileProductivityReviews();
       if (reviewed.created > 0 || reviewed.updated > 0 || reviewed.failed > 0) {
         logger.warn({ ...reviewed }, "startup productivity reconciliation created or updated review work");
@@ -881,6 +886,12 @@ export async function startServer(): Promise<StartedServer> {
           const swept = await heartbeat.sweepStaleIssueLocks();
           if (swept.cleared > 0) {
             logger.warn({ ...swept }, "periodic stale-lock sweeper cleared issue locks");
+          }
+        })
+        .then(async () => {
+          const frozenRepaired = await heartbeat.reconcileFrozenBlockedDependents();
+          if (frozenRepaired.repaired > 0) {
+            logger.warn({ ...frozenRepaired }, "periodic frozen-blocked-dependent reconcile re-armed issues");
           }
         })
         .then(async () => {

@@ -960,4 +960,99 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
       },
     });
   });
+
+  it("reconcileFrozenBlockedDependents re-arms a blocked issue whose blocker is already done", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const blockerId = randomUUID();
+    const frozenIssueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "TestAgent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {
+        heartbeat: {
+          wakeOnDemand: true,
+          maxConcurrentRuns: 1,
+        },
+      },
+      permissions: {},
+    });
+    // Blocker is already done — simulates the frozen-stock scenario where the
+    // blocker reached terminal status before the real-time repair was deployed.
+    await db.insert(issues).values([
+      {
+        id: blockerId,
+        companyId,
+        title: "Already Done Blocker",
+        status: "done",
+        priority: "high",
+      },
+      {
+        id: frozenIssueId,
+        companyId,
+        title: "Frozen Blocked Issue",
+        status: "blocked",
+        priority: "medium",
+        assigneeAgentId: agentId,
+      },
+    ]);
+    await db.insert(issueRelations).values({
+      companyId,
+      issueId: blockerId,
+      relatedIssueId: frozenIssueId,
+      type: "blocks",
+    });
+
+    const result = await heartbeat.reconcileFrozenBlockedDependents();
+    expect(result.repaired).toBe(1);
+    expect(result.issueIds).toContain(frozenIssueId);
+
+    // Issue must have moved to todo with blocker edges cleared.
+    const frozenIssueAfter = await db
+      .select({ status: issues.status })
+      .from(issues)
+      .where(eq(issues.id, frozenIssueId))
+      .then((rows) => rows[0] ?? null);
+    expect(frozenIssueAfter?.status).toBe("todo");
+
+    const blockerEdgesAfter = await db
+      .select({ id: issueRelations.id })
+      .from(issueRelations)
+      .where(
+        and(
+          eq(issueRelations.companyId, companyId),
+          eq(issueRelations.relatedIssueId, frozenIssueId),
+          eq(issueRelations.type, "blocks"),
+        ),
+      );
+    expect(blockerEdgesAfter).toHaveLength(0);
+
+    // A wake must be queued for the assignee with the correct reason.
+    const wake = await db
+      .select({
+        status: agentWakeupRequests.status,
+        reason: agentWakeupRequests.reason,
+      })
+      .from(agentWakeupRequests)
+      .where(
+        and(
+          eq(agentWakeupRequests.agentId, agentId),
+          sql`${agentWakeupRequests.payload} ->> 'issueId' = ${frozenIssueId}`,
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+    expect(wake?.reason).toBe("issue_blockers_resolved");
+  });
 });

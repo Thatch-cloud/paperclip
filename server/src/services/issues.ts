@@ -3671,6 +3671,15 @@ export function issueService(db: Db) {
         throw unprocessable("Blocked-by issues must belong to the same company");
       }
       await assertNoBlockingCycles(companyId, issueId, deduped, dbOrTx);
+    } else {
+      // Clear-to-empty still takes a row lock on the dependent so that a
+      // concurrent PATCH adding a new blocker serialises here rather than
+      // racing the unconditional DELETE below.
+      await dbOrTx.execute(
+        sql`SELECT ${issues.id} FROM ${issues}
+            WHERE ${and(eq(issues.companyId, companyId), eq(issues.id, issueId))}
+            FOR UPDATE`,
+      );
     }
 
     await dbOrTx
