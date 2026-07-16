@@ -333,6 +333,55 @@ describeEmbeddedPostgres("heartbeat issue graph liveness escalation", () => {
     });
   });
 
+  it("repairs blocked assigned issues that have no blocker edge or live continuation", async () => {
+    await enableAutoRecovery();
+    const { companyId, coderId, blockedIssueId, blockerIssueId } = await seedBlockedChain();
+    await db.delete(issueRelations).where(
+      and(
+        eq(issueRelations.issueId, blockerIssueId),
+        eq(issueRelations.relatedIssueId, blockedIssueId),
+      ),
+    );
+    const heartbeat = heartbeatService(db);
+
+    const first = await heartbeat.reconcileIssueGraphLiveness();
+    const second = await heartbeat.reconcileIssueGraphLiveness();
+
+    expect(first.findings).toBe(1);
+    expect(first.escalationsCreated).toBe(1);
+    expect(second.findings).toBe(0);
+    expect(second.escalationsCreated).toBe(0);
+
+    const escalations = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "harness_liveness_escalation")));
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]).toMatchObject({
+      parentId: blockedIssueId,
+      assigneeAgentId: coderId,
+      originId: [
+        "harness_liveness",
+        companyId,
+        blockedIssueId,
+        "blocked_without_action_path",
+        blockedIssueId,
+      ].join(":"),
+      originFingerprint: [
+        "harness_liveness_leaf",
+        companyId,
+        "blocked_without_action_path",
+        blockedIssueId,
+      ].join(":"),
+    });
+
+    const blockers = await db
+      .select({ blockerIssueId: issueRelations.issueId })
+      .from(issueRelations)
+      .where(eq(issueRelations.relatedIssueId, blockedIssueId));
+    expect(blockers.map((row) => row.blockerIssueId)).toEqual([escalations[0]!.id]);
+  });
+
   it("treats open recovery issues as active waiting paths for non-assigned-backlog states", async () => {
     await enableAutoRecovery();
     const { companyId, managerId, blockedIssueId, blockerIssueId } = await seedBlockedChain();
