@@ -2791,6 +2791,7 @@ export function issueRoutes(
         : continuationSummary;
 
     res.json({
+      serverTimeUtc: new Date().toISOString(),
       issue: {
         id: issue.id,
         identifier: issue.identifier,
