@@ -11,6 +11,7 @@ const mockIssueService = vi.hoisted(() => ({
   getCurrentScheduledRetry: vi.fn(),
   findMentionedAgents: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
+  resolveBlockedDependents: vi.fn(),
   getWakeableParentAfterChildCompletion: vi.fn(),
 }));
 
@@ -233,6 +234,7 @@ describe.sequential("issue comment reopen routes", () => {
     mockIssueService.getCurrentScheduledRetry.mockReset();
     mockIssueService.findMentionedAgents.mockReset();
     mockIssueService.listWakeableBlockedDependents.mockReset();
+    mockIssueService.resolveBlockedDependents.mockReset();
     mockIssueService.getWakeableParentAfterChildCompletion.mockReset();
     mockAccessService.canUser.mockReset();
     mockAccessService.decide.mockReset();
@@ -315,6 +317,7 @@ describe.sequential("issue comment reopen routes", () => {
     });
     mockIssueService.getCurrentScheduledRetry.mockResolvedValue(null);
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.resolveBlockedDependents.mockResolvedValue([]);
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
     mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
     mockAccessService.canUser.mockResolvedValue(false);
@@ -1951,10 +1954,11 @@ describe.sequential("issue comment reopen routes", () => {
       updatedAt: new Date(),
       _tx: tx,
     }));
-    mockIssueService.listWakeableBlockedDependents.mockResolvedValue([
+    mockIssueService.resolveBlockedDependents.mockResolvedValue([
       {
         id: "dependent-1",
         assigneeAgentId: dependentAgentId,
+        status: "blocked",
         blockerIssueIds: [issue.id],
       },
     ]);
@@ -1972,7 +1976,10 @@ describe.sequential("issue comment reopen routes", () => {
       .send({ body: reviewBody });
 
     expect(res.status).toBe(201);
-    expect(mockIssueService.listWakeableBlockedDependents).toHaveBeenCalledWith(issue.id);
+    expect(mockIssueService.resolveBlockedDependents).toHaveBeenCalledWith(
+      issue.id,
+      expect.any(Object),
+    );
     await waitForWakeup(() => {
       expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
         dependentAgentId,

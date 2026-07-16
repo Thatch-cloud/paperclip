@@ -960,4 +960,114 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
       },
     });
   });
+
+  it("clears the blocker edge and moves a blocked dependent to todo when the blocker run completes (workspace_finalize path)", async () => {
+    const companyId = randomUUID();
+    const blockerAgentId = randomUUID();
+    const dependentAgentId = randomUUID();
+    const blockerId = randomUUID();
+    const dependentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values([
+      {
+        id: blockerAgentId,
+        companyId,
+        name: "BlockerAgent",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: { heartbeat: { wakeOnDemand: true, maxConcurrentRuns: 1 } },
+        permissions: {},
+      },
+      {
+        id: dependentAgentId,
+        companyId,
+        name: "DependentAgent",
+        role: "engineer",
+        status: "active",
+        adapterType: "codex_local",
+        adapterConfig: {},
+        runtimeConfig: { heartbeat: { wakeOnDemand: false, maxConcurrentRuns: 1 } },
+        permissions: {},
+      },
+    ]);
+    await db.insert(issues).values([
+      {
+        id: blockerId,
+        companyId,
+        title: "Blocker",
+        status: "todo",
+        priority: "medium",
+        assigneeAgentId: blockerAgentId,
+      },
+      {
+        id: dependentId,
+        companyId,
+        title: "Dependent",
+        status: "blocked",
+        priority: "medium",
+        assigneeAgentId: dependentAgentId,
+      },
+    ]);
+    await db.insert(issueRelations).values({
+      companyId,
+      issueId: blockerId,
+      relatedIssueId: dependentId,
+      type: "blocks",
+    });
+
+    // Adapter marks the blocker as done during execution — simulates completing the blocker task.
+    mockAdapterExecute.mockImplementationOnce(async () => {
+      await db.update(issues).set({ status: "done", updatedAt: new Date() }).where(eq(issues.id, blockerId));
+      return {
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        errorMessage: null,
+        summary: "Blocker task done.",
+        provider: "test",
+        model: "test-model",
+      };
+    });
+
+    const blockerWake = await heartbeat.wakeup(blockerAgentId, {
+      source: "assignment",
+      triggerDetail: "system",
+      reason: "issue_assigned",
+      payload: { issueId: blockerId },
+      contextSnapshot: { issueId: blockerId, wakeReason: "issue_assigned" },
+    });
+    expect(blockerWake).not.toBeNull();
+
+    await waitForCondition(async () => {
+      const run = await db
+        .select({ status: heartbeatRuns.status })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, blockerWake!.id))
+        .then((rows) => rows[0] ?? null);
+      return run?.status === "succeeded";
+    }, 10_000);
+
+    // After the workspace_finalize path runs, the blocker edge must be cleared
+    // and the blocked dependent must have been moved to todo.
+    const remainingEdges = await db
+      .select()
+      .from(issueRelations)
+      .where(eq(issueRelations.relatedIssueId, dependentId));
+    expect(remainingEdges).toHaveLength(0);
+
+    const dependent = await db
+      .select({ status: issues.status })
+      .from(issues)
+      .where(eq(issues.id, dependentId))
+      .then((rows) => rows[0] ?? null);
+    expect(dependent?.status).toBe("todo");
+  });
 });

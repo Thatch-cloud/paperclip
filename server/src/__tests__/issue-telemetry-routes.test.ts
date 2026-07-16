@@ -6,6 +6,7 @@ const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
   getWakeableParentAfterChildCompletion: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
+  resolveBlockedDependents: vi.fn(),
   update: vi.fn(),
 }));
 
@@ -137,6 +138,7 @@ describe("issue telemetry routes", () => {
     mockIssueService.getById.mockResolvedValue(makeIssue("todo"));
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.resolveBlockedDependents.mockResolvedValue([]);
     mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
       ...makeIssue("todo"),
       ...patch,

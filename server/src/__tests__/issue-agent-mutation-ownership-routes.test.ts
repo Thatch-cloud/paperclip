@@ -23,6 +23,7 @@ const mockIssueService = vi.hoisted(() => ({
   list: vi.fn(),
   listAttachments: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
+  resolveBlockedDependents: vi.fn(),
   remove: vi.fn(),
   removeAttachment: vi.fn(),
   update: vi.fn(),
@@ -352,6 +353,7 @@ describe("agent issue mutation checkout ownership", () => {
     mockIssueService.list.mockReset();
     mockIssueService.listAttachments.mockReset();
     mockIssueService.listWakeableBlockedDependents.mockReset();
+    mockIssueService.resolveBlockedDependents.mockReset();
     mockIssueRecoveryActionService.getActiveForIssue.mockReset();
     mockIssueRecoveryActionService.getActiveForIssue.mockResolvedValue(null);
     mockIssueRecoveryActionService.listActiveForIssues.mockReset();
@@ -449,6 +451,7 @@ describe("agent issue mutation checkout ownership", () => {
     }));
     mockIssueService.getRelationSummaries.mockResolvedValue({ blockedBy: [], blocks: [] });
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.resolveBlockedDependents.mockResolvedValue([]);
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
     mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
