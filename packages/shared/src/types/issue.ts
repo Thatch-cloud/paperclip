@@ -710,6 +710,7 @@ export interface SuggestTasksResult {
   createdTasks?: SuggestTasksResultCreatedTask[];
   skippedClientKeys?: string[];
   rejectionReason?: string | null;
+  cancellationReason?: string | null;
 }
 
 export interface AskUserQuestionsQuestionOption {
@@ -812,7 +813,7 @@ export interface RequestCheckboxConfirmationPayload {
 
 export interface RequestConfirmationResult {
   version: 1;
-  outcome: "accepted" | "rejected" | "superseded_by_comment" | "stale_target" | "issue_terminal";
+  outcome: "accepted" | "rejected" | "cancelled" | "superseded_by_comment" | "stale_target" | "issue_terminal";
   reason?: string | null;
   commentId?: string | null;
   staleTarget?: RequestConfirmationTarget | null;

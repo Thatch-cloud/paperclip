@@ -721,14 +721,14 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
       userId: "local-board",
     });
 
-    const cancelled = await interactionsSvc.cancelQuestions({
+    const cancelled = await interactionsSvc.cancelInteraction({
       id: issueId,
       companyId,
     }, created.id, {
       reason: "Not needed anymore",
     }, {
       userId: "local-board",
-    });
+    }, { canCancelAny: true });
 
     expect(cancelled.status).toBe("cancelled");
     expect(cancelled.result).toEqual({
@@ -747,6 +747,95 @@ describeEmbeddedPostgres("issueThreadInteractionService", () => {
     }, {
       userId: "local-board",
     })).rejects.toThrow("Interaction has already been resolved");
+  });
+
+  it("lets the creating agent cancel its own pending interaction but rejects other agents", async () => {
+    const { companyId, issueId } = await seedConfirmationIssue("Agent-owned cancellation");
+    const creatorAgentId = randomUUID();
+    const otherAgentId = randomUUID();
+
+    await db.insert(agents).values([
+      {
+        id: creatorAgentId,
+        companyId,
+        name: "Creator",
+        role: "engineer",
+        status: "idle",
+      },
+      {
+        id: otherAgentId,
+        companyId,
+        name: "Other",
+        role: "engineer",
+        status: "idle",
+      },
+    ]);
+
+    const created = await interactionsSvc.create({
+      id: issueId,
+      companyId,
+    }, {
+      kind: "request_confirmation",
+      continuationPolicy: "wake_assignee",
+      payload: {
+        version: 1,
+        prompt: "Approve this plan?",
+      },
+    }, {
+      agentId: creatorAgentId,
+    });
+
+    await expect(interactionsSvc.cancelInteraction({
+      id: issueId,
+      companyId,
+    }, created.id, {
+      reason: "Wrong owner",
+    }, {
+      agentId: otherAgentId,
+    })).rejects.toThrow("Only the interaction creator or board can cancel this interaction");
+
+    const cancelled = await interactionsSvc.cancelInteraction({
+      id: issueId,
+      companyId,
+    }, created.id, {
+      reason: "Plan superseded by a new revision",
+    }, {
+      agentId: creatorAgentId,
+    });
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.result).toEqual({
+      version: 1,
+      outcome: "cancelled",
+      reason: "Plan superseded by a new revision",
+    });
+
+    const [row] = await db
+      .select({
+        status: issueThreadInteractions.status,
+        result: issueThreadInteractions.result,
+        resolvedByAgentId: issueThreadInteractions.resolvedByAgentId,
+        resolvedAt: issueThreadInteractions.resolvedAt,
+      })
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.id, created.id));
+
+    expect(row).toMatchObject({
+      status: "cancelled",
+      result: {
+        version: 1,
+        outcome: "cancelled",
+        reason: "Plan superseded by a new revision",
+      },
+      resolvedByAgentId: creatorAgentId,
+    });
+    expect(row?.resolvedAt).toBeInstanceOf(Date);
+
+    const pendingRows = await db
+      .select({ id: issueThreadInteractions.id })
+      .from(issueThreadInteractions)
+      .where(eq(issueThreadInteractions.status, "pending"));
+    expect(pendingRows).toEqual([]);
   });
 
   it("reuses the existing interaction when the same idempotency key is submitted twice", async () => {
