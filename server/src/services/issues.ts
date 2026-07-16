@@ -125,6 +125,28 @@ function applyStatusSideEffects(
   return patch;
 }
 
+async function expirePendingInteractionsForTerminalIssue(
+  dbOrTx: Pick<Db, "update">,
+  issue: { id: string; companyId: string },
+  actor: { agentId?: string | null; userId?: string | null },
+) {
+  const now = new Date();
+  await dbOrTx
+    .update(issueThreadInteractions)
+    .set({
+      status: "expired",
+      resolvedByAgentId: actor.agentId ?? null,
+      resolvedByUserId: actor.userId ?? null,
+      resolvedAt: now,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(issueThreadInteractions.companyId, issue.companyId),
+      eq(issueThreadInteractions.issueId, issue.id),
+      eq(issueThreadInteractions.status, "pending"),
+    ));
+}
+
 function readStringFromRecord(record: unknown, key: string) {
   if (!record || typeof record !== "object") return null;
   const value = (record as Record<string, unknown>)[key];
@@ -5342,6 +5364,12 @@ export function issueService(db: Db) {
           .returning()
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!updated) return null;
+        if (issueData.status === "done" || issueData.status === "cancelled") {
+          await expirePendingInteractionsForTerminalIssue(tx, updated, {
+            agentId: actorAgentId ?? null,
+            userId: actorUserId ?? null,
+          });
+        }
         if (nextLabelIds !== undefined) {
           await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
         }
