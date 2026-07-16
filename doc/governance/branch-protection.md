@@ -9,6 +9,9 @@ GitHub identity with admin access to `Thatch-cloud/paperclip`.
 
 ## Desired state
 
+Applied to `Thatch-cloud/paperclip@master` on 2026-07-16 after merge
+`cb3ed739` added the base-branch `review-gate.yml` workflow and agent roster.
+
 | Setting | Value | Why |
 | --- | --- | --- |
 | Required status checks | `review`, `verify`, `Verify serialized server suites (1/4)`, `Verify serialized server suites (2/4)`, `Verify serialized server suites (3/4)`, `Verify serialized server suites (4/4)`, `Canary Dry Run`, `e2e`, `Recordable non-author review` | Existing PR quality gates plus the Paperclip non-author review gate. |
