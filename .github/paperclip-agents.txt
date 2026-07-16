@@ -1,0 +1,17 @@
+# Paperclip agent roster - valid agent keys for review-gate attestations.
+#
+# Both Author-agent and Reviewer-agent in a paperclip-review block must appear
+# here (case-insensitive) or the gate fails closed.
+#
+# Update this file when agents join or leave the fleet. The key must match the
+# agent's short name as used in attestation blocks and Paperclip issue assignments.
+#
+# Bootstrap note: this file must exist on the base branch before review-gate.yml
+# can validate attestations. The workflow reads it from the base branch, not the
+# PR head, so a PR cannot add its own author key to bypass the gate.
+ada
+grace
+linus
+tim
+ceo
+cto
