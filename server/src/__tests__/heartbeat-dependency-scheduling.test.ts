@@ -1055,8 +1055,8 @@ describeEmbeddedPostgres("heartbeat dependency-aware queued run selection", () =
       return run?.status === "succeeded";
     }, 10_000);
 
-    // After the workspace_finalize path runs, the blocker edge must be cleared
-    // and the blocked dependent must have been moved to todo.
+    // Regression coverage for the terminal-status race: once the blocker run is
+    // visible as succeeded, workspace_finalize must already have cleared the edge.
     const remainingEdges = await db
       .select()
       .from(issueRelations)
