@@ -188,7 +188,11 @@ async function setupCompany(boardRequest: APIRequestContext): Promise<TestContex
     }
 
     const keyRes = await boardRequest.post(`${BASE_URL}/api/agents/${agent.id}/keys`, {
-      data: { name: `e2e-${name.toLowerCase()}` },
+      data: {
+        name: `e2e-${name.toLowerCase()}`,
+        scopes: ["read", "write"],
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      },
     });
     expect(keyRes.ok()).toBe(true);
     const keyData = await keyRes.json();
