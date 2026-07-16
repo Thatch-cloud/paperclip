@@ -4250,7 +4250,7 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
           Create API Key
         </h3>
         <p className="text-xs text-muted-foreground">
-          API keys allow this agent to authenticate calls to the Paperclip server.
+          API keys allow this agent to authenticate calls to the Paperclip server. New keys are scoped to read/write access and expire after one year.
         </p>
         <div className="flex items-center gap-2">
           <Input
@@ -4292,6 +4292,12 @@ function KeysTab({ agentId, companyId }: { agentId: string; companyId?: string }
                   <span className="text-sm font-medium">{key.name}</span>
                   <span className="text-xs text-muted-foreground ml-3">
                     Created {formatDate(key.createdAt)}
+                  </span>
+                  <span className="text-xs text-muted-foreground ml-3">
+                    Scope {key.scopes?.join("+") ?? "legacy full access"}
+                  </span>
+                  <span className="text-xs text-muted-foreground ml-3">
+                    Expires {key.expiresAt ? formatDate(key.expiresAt) : "never (legacy)"}
                   </span>
                 </div>
                 <Button

@@ -683,7 +683,7 @@ export function agentService(db: Db) {
       });
     },
 
-    createApiKey: async (id: string, name: string) => {
+    createApiKey: async (id: string, input: { name: string; scopes: string[]; expiresAt: string }) => {
       const existing = await getById(id);
       if (!existing) throw notFound("Agent not found");
       if (existing.status === "pending_approval") {
@@ -700,8 +700,10 @@ export function agentService(db: Db) {
         .values({
           agentId: id,
           companyId: existing.companyId,
-          name,
+          name: input.name,
           keyHash,
+          scopes: input.scopes,
+          expiresAt: new Date(input.expiresAt),
         })
         .returning()
         .then((rows) => rows[0]);
@@ -710,6 +712,8 @@ export function agentService(db: Db) {
         id: created.id,
         name: created.name,
         token,
+        scopes: created.scopes,
+        expiresAt: created.expiresAt,
         createdAt: created.createdAt,
       };
     },
@@ -720,6 +724,8 @@ export function agentService(db: Db) {
           id: agentApiKeys.id,
           name: agentApiKeys.name,
           createdAt: agentApiKeys.createdAt,
+          scopes: agentApiKeys.scopes,
+          expiresAt: agentApiKeys.expiresAt,
           revokedAt: agentApiKeys.revokedAt,
         })
         .from(agentApiKeys)
@@ -733,6 +739,8 @@ export function agentService(db: Db) {
           companyId: agentApiKeys.companyId,
           name: agentApiKeys.name,
           createdAt: agentApiKeys.createdAt,
+          scopes: agentApiKeys.scopes,
+          expiresAt: agentApiKeys.expiresAt,
           revokedAt: agentApiKeys.revokedAt,
         })
         .from(agentApiKeys)

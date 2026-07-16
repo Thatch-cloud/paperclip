@@ -27,6 +27,8 @@ interface CreatedAgentKey {
   id: string;
   name: string;
   token: string;
+  scopes: string[] | null;
+  expiresAt: string | null;
   createdAt: string;
 }
 
@@ -128,7 +130,10 @@ async function connectWizard(opts: ConnectOptions) {
   if (agents.length === 0) throw new Error(`Company '${company.name}' has no agents to connect.`);
   const agent = await chooseAgent(agents, resolvedProfile.profile.agentId);
   const tokenName = opts.tokenName?.trim() || `cli-agent-${new Date().toISOString()}`;
-  const key = await boardApi.post<CreatedAgentKey>(apiPath`/api/agents/${agent.id}/keys`, createAgentKeySchema.parse({ name: tokenName }));
+  const key = await boardApi.post<CreatedAgentKey>(
+    apiPath`/api/agents/${agent.id}/keys`,
+    createAgentKeySchema.parse({ name: tokenName, scopes: ["read", "write"], expiresAt: defaultAgentKeyExpiresAt() }),
+  );
   if (!key) throw new Error("Failed to create agent token");
   upsertProfile(profileName, {
     apiBase,
@@ -154,6 +159,12 @@ async function connectWizard(opts: ConnectOptions) {
     key: publicKeyResult(key),
     exports: buildExports({ apiBase, companyId: company.id, agentId: agent.id, envName: apiKeyEnvVarName, token: key.token }),
   };
+}
+
+function defaultAgentKeyExpiresAt() {
+  const expiresAt = new Date();
+  expiresAt.setUTCFullYear(expiresAt.getUTCFullYear() + 1);
+  return expiresAt.toISOString();
 }
 
 async function verifyHealth(apiBase: string): Promise<void> {

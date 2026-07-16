@@ -75,6 +75,51 @@ describe("assertCompanyAccess", () => {
     expect(() => assertCompanyAccess(req, "company-1")).not.toThrow();
   });
 
+  it("allows read-only scoped agent keys to read", () => {
+    const req = makeReq({
+      method: "GET",
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        keyScopes: ["read"],
+        source: "agent_key",
+      },
+    });
+
+    expect(() => assertCompanyAccess(req, "company-1")).not.toThrow();
+  });
+
+  it("rejects read-only scoped agent keys for writes", () => {
+    const req = makeReq({
+      method: "PATCH",
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        keyScopes: ["read"],
+        source: "agent_key",
+      },
+    });
+
+    expect(() => assertCompanyAccess(req, "company-1")).toThrow("Agent key scope is read-only");
+  });
+
+  it("preserves legacy agent keys that have no stored scope", () => {
+    const req = makeReq({
+      method: "PATCH",
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        keyScopes: null,
+        source: "agent_key",
+      },
+    });
+
+    expect(() => assertCompanyAccess(req, "company-1")).not.toThrow();
+  });
+
   it("rejects signed-in instance admins without explicit company access", () => {
     const req = makeReq({
       method: "GET",

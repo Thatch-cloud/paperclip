@@ -3107,7 +3107,7 @@ export function agentRoutes(
     if (!agent) {
       return;
     }
-    const key = await svc.createApiKey(id, req.body.name);
+    const key = await svc.createApiKey(id, req.body);
 
     await logActivity(db, {
       companyId: agent.companyId,
@@ -3116,7 +3116,7 @@ export function agentRoutes(
       action: "agent.key_created",
       entityType: "agent",
       entityId: agent.id,
-      details: { keyId: key.id, name: key.name },
+      details: { keyId: key.id, name: key.name, scopes: key.scopes, expiresAt: key.expiresAt },
     });
 
     res.status(201).json(key);

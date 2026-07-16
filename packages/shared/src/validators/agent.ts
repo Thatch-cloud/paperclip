@@ -115,6 +115,8 @@ export type UpdateAgentInstructionsPath = z.infer<typeof updateAgentInstructions
 
 export const createAgentKeySchema = z.object({
   name: z.string().min(1).default("default"),
+  scopes: z.array(z.enum(["read", "write"])).min(1),
+  expiresAt: z.string().datetime(),
 });
 
 export type CreateAgentKey = z.infer<typeof createAgentKeySchema>;
