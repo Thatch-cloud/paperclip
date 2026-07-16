@@ -2842,6 +2842,8 @@ async function listIssueBlockedInboxAttentionMap(
                 return "Assign active owner";
               case "blocked_by_cancelled_issue":
                 return "Replace blocker";
+              case "blocked_without_action_path":
+                return "Create recovery path";
               case "invalid_review_participant":
                 return "Repair review participant";
               case "in_review_without_action_path":
