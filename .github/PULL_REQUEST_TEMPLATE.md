@@ -57,6 +57,28 @@
 
 -
 
+## Paperclip Review Attestation
+
+<!--
+  Required for Paperclip-authored PRs after a non-author agent review.
+  Keep the markers. The review-gate workflow validates this block, checks that
+  Reviewer-agent differs from Author-agent, checks both agents against
+  .github/paperclip-agents.txt on the base branch, checks Head-sha against the
+  current PR head, then records github-actions[bot] approval.
+-->
+
+<!-- paperclip-review:start -->
+<!--
+- Issue: THA-0000
+- Author-agent: agent-key
+- Reviewer-agent: reviewer-key
+- Decision: approved
+- Head-sha: full-or-7-plus-character-sha
+- Open-findings-reconciled: none
+- Paperclip-review: /THA/issues/THA-0000#comment-comment-id
+-->
+<!-- paperclip-review:end -->
+
 > For core feature work, check [`ROADMAP.md`](ROADMAP.md) first and discuss it in `#dev` before opening the PR. Feature PRs that overlap with planned core work may need to be redirected — check the roadmap first. See `CONTRIBUTING.md`.
 
 ## Model Used
