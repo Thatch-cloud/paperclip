@@ -1,0 +1,193 @@
+name: review-gate
+
+# Records the Paperclip-level non-author review gate in GitHub.
+#
+# Paperclip agents may share or rotate GitHub identities, so GitHub's native
+# reviewer identity is not always the authoritative agent identity. This workflow
+# validates a Paperclip review attestation in the PR body and records a formal
+# github-actions[bot] approval when the attestation is current and non-author.
+#
+# The reviewer adds this block to the PR body (markers required):
+#
+#   <!-- paperclip-review:start -->
+#   - Issue: THA-1806
+#   - Author-agent: grace
+#   - Reviewer-agent: tim
+#   - Decision: approved
+#   - Head-sha: <full 40-char sha of the commit reviewed>
+#   - Open-findings-reconciled: none
+#   - Paperclip-review: /THA/issues/THA-1806#comment-1234
+#   <!-- paperclip-review:end -->
+#
+# Gate passes only when the block is present and well-formed, Decision is
+# `approved`, Author-agent and Reviewer-agent are in .github/paperclip-agents.txt,
+# Reviewer-agent differs from Author-agent, Head-sha matches the current PR head,
+# and Open-findings-reconciled does not admit unresolved high-severity findings.
+# The roster is read from the base branch, not the PR head, so a PR cannot modify
+# the roster to make its own attestation pass.
+
+# Run from the base branch context. The workflow never checks out or executes PR
+# code; it only reads PR metadata and the base-branch roster.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  non-author-review:
+    name: Recordable non-author review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate Paperclip review attestation and record approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const headSha = pr.head.sha;
+            const body = pr.body || '';
+            const bot = 'github-actions[bot]';
+
+            async function botReviews() {
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100,
+              });
+              return reviews.filter(review => review.user && review.user.login === bot);
+            }
+
+            async function dismissBotApprovals(reason) {
+              for (const review of await botReviews()) {
+                if (review.state === 'APPROVED') {
+                  await github.rest.pulls.dismissReview({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: pr.number,
+                    review_id: review.id,
+                    message: reason,
+                  });
+                  core.info(`Dismissed stale bot approval #${review.id}.`);
+                }
+              }
+            }
+
+            function fail(message) {
+              core.setFailed(
+                `review-gate: ${message}\n\n` +
+                'A non-author Paperclip review must be attested in the PR body. ' +
+                'See CONTRIBUTING.md ("Recordable non-author review").'
+              );
+            }
+
+            let rosterRaw;
+            try {
+              const response = await github.request('GET /repos/{owner}/{repo}/contents/{path}', {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: '.github/paperclip-agents.txt',
+                ref: pr.base.ref,
+              });
+              rosterRaw = Buffer.from(response.data.content, 'base64').toString('utf8');
+            } catch (error) {
+              if (error.status === 404) {
+                await dismissBotApprovals('Agent roster missing on base branch.');
+                return fail(
+                  `agent roster .github/paperclip-agents.txt not found on base branch ${pr.base.ref}; ` +
+                  'merge the roster before enforcing this gate.'
+                );
+              }
+              throw error;
+            }
+
+            const roster = new Set(
+              rosterRaw.split('\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'))
+                .map(line => line.toLowerCase())
+            );
+
+            const match = body.match(
+              /<!--\s*paperclip-review:start\s*-->([\s\S]*?)<!--\s*paperclip-review:end\s*-->/i
+            );
+            if (!match) {
+              await dismissBotApprovals('No Paperclip review attestation present.');
+              return fail('no paperclip-review attestation block found in the PR body.');
+            }
+
+            const block = match[1];
+            const field = (name) => {
+              const result = block.match(new RegExp(`${name}\\s*:\\s*(.+)`, 'i'));
+              return result ? result[1].trim().replace(/\s+$/, '') : '';
+            };
+
+            const author = field('Author-agent').toLowerCase();
+            const reviewer = field('Reviewer-agent').toLowerCase();
+            const decision = field('Decision').toLowerCase();
+            const attestSha = field('Head-sha');
+            const pcReview = field('Paperclip-review');
+            const reconciled = field('Open-findings-reconciled').toLowerCase();
+
+            const problems = [];
+            if (!author) problems.push('Author-agent is missing');
+            if (!reviewer) problems.push('Reviewer-agent is missing');
+            if (!pcReview) problems.push('Paperclip-review link is missing');
+            if (decision !== 'approved') {
+              problems.push(`Decision must be approved (got ${decision || 'empty'})`);
+            }
+            if (author && !roster.has(author)) {
+              problems.push(`Author-agent (${author}) is not in .github/paperclip-agents.txt`);
+            }
+            if (reviewer && !roster.has(reviewer)) {
+              problems.push(`Reviewer-agent (${reviewer}) is not in .github/paperclip-agents.txt`);
+            }
+            if (author && reviewer && author === reviewer) {
+              problems.push(`reviewer (${reviewer}) must differ from author (${author})`);
+            }
+            const shaOk = attestSha &&
+              (headSha === attestSha || (attestSha.length >= 7 && headSha.startsWith(attestSha)));
+            if (!shaOk) {
+              problems.push(`Head-sha (${attestSha || 'empty'}) does not match current PR head (${headSha.slice(0, 12)})`);
+            }
+            if (!reconciled) {
+              problems.push('Open-findings-reconciled is missing');
+            } else if (/(^|[;\n])\s*(open|unresolved)\b/i.test(reconciled)) {
+              problems.push('Open-findings-reconciled must not list open or unresolved high-severity findings');
+            }
+
+            if (problems.length > 0) {
+              await dismissBotApprovals('Paperclip review attestation invalid or stale.');
+              return fail('attestation invalid:\n  - ' + problems.join('\n  - '));
+            }
+
+            const existing = await botReviews();
+            const liveApproval = existing.find(review => review.state === 'APPROVED');
+            if (liveApproval) {
+              core.info(`Bot approval already recorded (#${liveApproval.id}).`);
+              return;
+            }
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              event: 'APPROVE',
+              body:
+                'Recording the Paperclip non-author review gate.\n\n' +
+                `- Author agent: ${author}\n` +
+                `- Reviewer agent: ${reviewer}\n` +
+                `- Reviewed commit: ${attestSha}\n` +
+                `- Open findings reconciled: ${reconciled}\n` +
+                `- Paperclip review: ${pcReview}\n\n` +
+                'This approval is the GitHub record of a review performed and attributed at the Paperclip layer. ' +
+                'It is dismissed automatically if the attestation is removed or the PR head changes.',
+            });
+
+            core.notice(`review-gate satisfied: ${reviewer} reviewed ${author}'s PR (${pcReview}).`);
