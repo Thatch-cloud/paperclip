@@ -351,7 +351,13 @@ describe.sequential("agent cross-tenant route authorization", () => {
       {
         label: "create key",
         request: (app: express.Express) =>
-          requestApp(app, (baseUrl) => request(baseUrl).post(`/api/agents/${agentId}/keys`).send({ name: "exploit" })),
+          requestApp(app, (baseUrl) =>
+            request(baseUrl).post(`/api/agents/${agentId}/keys`).send({
+              name: "exploit",
+              scopes: ["read", "write"],
+              expiresAt: "2027-01-01T00:00:00.000Z",
+            }),
+          ),
         untouched: [mockAgentService.createApiKey],
       },
       {
