@@ -4,10 +4,14 @@ import type { Db } from "@paperclipai/db";
 import { and, count, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { heartbeatRuns, instanceUserRoles, invites } from "@paperclipai/db";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
-import { readPersistedDevServerStatus, toDevServerHealthStatus, writeDevServerRestartRequest } from "../dev-server-status.js";
+import {
+  readPersistedDevServerStatus,
+  toDevServerHealthStatus,
+  writeDevServerRestartRequest,
+} from "../dev-server-status.js";
 import { logger } from "../middleware/logger.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
-import { serverVersion } from "../version.js";
+import { deploymentVersion, serverVersion } from "../version.js";
 
 function shouldExposeFullHealthDetails(
   actorType: "none" | "board" | "agent" | null | undefined,
@@ -85,12 +89,17 @@ export function healthRoutes(
       opts.deploymentMode,
     );
     const exposeDevServerDetails =
-      exposeFullDetails || hasDevServerStatusToken(req.get("x-paperclip-dev-server-status-token"));
+      exposeFullDetails ||
+      hasDevServerStatusToken(req.get("x-paperclip-dev-server-status-token"));
 
     if (!db) {
       res.json(
         exposeFullDetails
-          ? { status: "ok", version: serverVersion }
+          ? {
+              status: "ok",
+              version: serverVersion,
+              deployment: deploymentVersion,
+            }
           : { status: "ok", deploymentMode: opts.deploymentMode },
       );
       return;
@@ -103,7 +112,8 @@ export function healthRoutes(
       res.status(503).json({
         status: "unhealthy",
         version: serverVersion,
-        error: "database_unreachable"
+        deployment: deploymentVersion,
+        error: "database_unreachable",
       });
       return;
     }
@@ -138,7 +148,11 @@ export function healthRoutes(
 
     const persistedDevServerStatus = readPersistedDevServerStatus();
     let devServer: ReturnType<typeof toDevServerHealthStatus> | undefined;
-    if (exposeDevServerDetails && persistedDevServerStatus && typeof (db as { select?: unknown }).select === "function") {
+    if (
+      exposeDevServerDetails &&
+      persistedDevServerStatus &&
+      typeof (db as { select?: unknown }).select === "function"
+    ) {
       const instanceSettings = instanceSettingsService(db);
       const experimentalSettings = await instanceSettings.getExperimental();
       const activeRunCount = await db
@@ -148,7 +162,8 @@ export function healthRoutes(
         .then((rows) => Number(rows[0]?.count ?? 0));
 
       devServer = toDevServerHealthStatus(persistedDevServerStatus, {
-        autoRestartEnabled: experimentalSettings.autoRestartDevServerWhenIdle ?? false,
+        autoRestartEnabled:
+          experimentalSettings.autoRestartDevServerWhenIdle ?? false,
         activeRunCount,
       });
     }
@@ -168,6 +183,7 @@ export function healthRoutes(
     res.json({
       status: "ok",
       version: serverVersion,
+      deployment: deploymentVersion,
       deploymentMode: opts.deploymentMode,
       deploymentExposure: opts.deploymentExposure,
       authReady: opts.authReady,
