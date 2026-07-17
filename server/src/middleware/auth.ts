@@ -177,10 +177,15 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       return;
     }
 
-    await db
-      .update(agentApiKeys)
-      .set({ lastUsedAt: new Date() })
-      .where(eq(agentApiKeys.id, key.id));
+    try {
+      await db
+        .update(agentApiKeys)
+        .set({ lastUsedAt: new Date() })
+        .where(eq(agentApiKeys.id, key.id));
+    } catch (error) {
+      const code = (error as { code?: unknown })?.code;
+      if (code !== "42501") throw error;
+    }
 
     const agentRecord = await db
       .select()

@@ -776,4 +776,60 @@ export async function ensurePostgresDatabase(
   }
 }
 
+export async function ensureRuntimeLeastPrivilegeRole(input: {
+  adminDatabaseUrl: string;
+  databaseName: string;
+  adminUser: string;
+  adminPassword: string;
+  runtimeUser: string;
+  runtimePassword: string;
+}): Promise<void> {
+  if (!isSafeIdentifier(input.databaseName)) throw new Error(`Unsafe database name: ${input.databaseName}`);
+  if (!isSafeIdentifier(input.adminUser)) throw new Error(`Unsafe admin role: ${input.adminUser}`);
+  if (!isSafeIdentifier(input.runtimeUser)) throw new Error(`Unsafe runtime role: ${input.runtimeUser}`);
+
+  const adminSql = createUtilitySql(input.adminDatabaseUrl);
+  try {
+    await adminSql.unsafe(
+      `ALTER ROLE ${quoteIdentifier(input.adminUser)} WITH PASSWORD ${quoteLiteral(input.adminPassword)}`,
+    );
+    await adminSql.unsafe(
+      `DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ${quoteLiteral(input.runtimeUser)}) THEN
+          EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', ${quoteLiteral(input.runtimeUser)}, ${quoteLiteral(input.runtimePassword)});
+        ELSE
+          EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', ${quoteLiteral(input.runtimeUser)}, ${quoteLiteral(input.runtimePassword)});
+        END IF;
+      END $$`,
+    );
+    await adminSql.unsafe(
+      `GRANT CONNECT ON DATABASE ${quoteIdentifier(input.databaseName)} TO ${quoteIdentifier(input.runtimeUser)}`,
+    );
+  } finally {
+    await adminSql.end();
+  }
+
+  const databaseUrl = new URL(input.adminDatabaseUrl);
+  databaseUrl.pathname = `/${input.databaseName}`;
+  const dbSql = createUtilitySql(databaseUrl.toString());
+  try {
+    await dbSql.unsafe(`GRANT USAGE ON SCHEMA public TO ${quoteIdentifier(input.runtimeUser)}`);
+    await dbSql.unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${quoteIdentifier(input.runtimeUser)}`);
+    await dbSql.unsafe(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${quoteIdentifier(input.runtimeUser)}`);
+    await dbSql.unsafe(
+      `DO $$
+      BEGIN
+        IF to_regclass('public.agent_api_keys') IS NOT NULL THEN
+          REVOKE INSERT, UPDATE, DELETE ON TABLE ${quoteIdentifier("agent_api_keys")} FROM ${quoteIdentifier(input.runtimeUser)};
+        END IF;
+      END $$`,
+    );
+    await dbSql.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE ${quoteIdentifier(input.adminUser)} IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${quoteIdentifier(input.runtimeUser)}`);
+    await dbSql.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE ${quoteIdentifier(input.adminUser)} IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ${quoteIdentifier(input.runtimeUser)}`);
+  } finally {
+    await dbSql.end();
+  }
+}
+
 export type Db = ReturnType<typeof createDb>;

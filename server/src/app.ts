@@ -150,6 +150,7 @@ export async function createApp(
     instanceId?: string;
     hostVersion?: string;
     localPluginDir?: string;
+    agentKeyManagementDb?: Db;
     pluginMigrationDb?: Db;
     pluginWorkerManager?: PluginWorkerManager;
     betterAuthHandler?: express.RequestHandler;
@@ -222,7 +223,10 @@ export async function createApp(
   api.use(llmRoutes(db));
   api.use(companySkillRoutes(db));
   api.use(teamsCatalogRoutes(db));
-  api.use(agentRoutes(db, { pluginWorkerManager: workerManager }));
+  api.use(agentRoutes(db, {
+    pluginWorkerManager: workerManager,
+    keyManagementDb: opts.agentKeyManagementDb,
+  }));
   api.use(assetRoutes(db, opts.storageService));
   api.use(projectRoutes(db));
   api.use(issueRoutes(db, opts.storageService, {
@@ -327,6 +331,7 @@ export async function createApp(
       deploymentExposure: opts.deploymentExposure,
       bindHost: opts.bindHost,
       allowedHostnames: opts.allowedHostnames,
+      keyManagementDb: opts.agentKeyManagementDb,
     }),
   );
   app.use("/api", api);
