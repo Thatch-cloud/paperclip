@@ -109,6 +109,16 @@ export function healthRoutes(
       await db.execute(sql`SELECT 1`);
     } catch (error) {
       logger.warn({ err: error }, "Health check database probe failed");
+      if (!exposeFullDetails) {
+        res.status(503).json({
+          status: "unhealthy",
+          deploymentMode: opts.deploymentMode,
+          deploymentExposure: opts.deploymentExposure,
+          error: "database_unreachable",
+        });
+        return;
+      }
+
       res.status(503).json({
         status: "unhealthy",
         version: serverVersion,

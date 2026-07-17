@@ -34,7 +34,7 @@ RELEASE_DIR="$DEPLOY_ROOT/releases/$SHA"
 
 mkdir -p "$DEPLOY_ROOT/releases"
 
-if [[ ! -d "$RELEASE_DIR/.git" ]]; then
+if [[ ! -e "$RELEASE_DIR/.git" ]]; then
   git -C "$SOURCE_REPO" worktree add --detach "$RELEASE_DIR" "$SHA"
 fi
 

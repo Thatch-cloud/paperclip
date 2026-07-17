@@ -108,6 +108,59 @@ describe("GET /health", () => {
     });
   });
 
+  it("redacts deployment metadata for anonymous authenticated requests when the database probe fails", async () => {
+    const originalRef = process.env.PAPERCLIP_CONTROL_PLANE_REF;
+    const originalReleaseDir = process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR;
+    process.env.PAPERCLIP_CONTROL_PLANE_REF = "deadbeefcafe1234";
+    process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR =
+      "/home/thatch/.paperclip/control-plane/current";
+    vi.resetModules();
+    try {
+      const routesModule = await import("../routes/health.js");
+      const db = {
+        execute: vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED")),
+      } as unknown as Db;
+      const app = express();
+      app.use((req, _res, next) => {
+        (req as any).actor = { type: "none", source: "none" };
+        next();
+      });
+      app.use(
+        "/health",
+        routesModule.healthRoutes(db, {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+
+      const res = await request(app).get("/health");
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({
+        status: "unhealthy",
+        deploymentMode: "authenticated",
+        deploymentExposure: "public",
+        error: "database_unreachable",
+      });
+      expect(res.body).not.toHaveProperty("version");
+      expect(res.body).not.toHaveProperty("deployment");
+    } finally {
+      if (originalRef === undefined) {
+        delete process.env.PAPERCLIP_CONTROL_PLANE_REF;
+      } else {
+        process.env.PAPERCLIP_CONTROL_PLANE_REF = originalRef;
+      }
+      if (originalReleaseDir === undefined) {
+        delete process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR;
+      } else {
+        process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR = originalReleaseDir;
+      }
+      vi.resetModules();
+    }
+  });
+
   it("redacts detailed metadata for anonymous requests in authenticated mode", async () => {
     const devServerStatus = await import("../dev-server-status.js");
     vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(
