@@ -45,6 +45,7 @@ export type AuthorizationAction =
   | "agent:read"
   | "agent:wake"
   | "company_scope:read"
+  | "issue:comment"
   | "issue:mutate"
   | "issue:read"
   | "project:read"
@@ -111,6 +112,7 @@ function permissionForAction(action: AuthorizationAction): PermissionKey | null 
     action === "agent:read" ||
     action === "agent:wake" ||
     action === "company_scope:read" ||
+    action === "issue:comment" ||
     action === "issue:read" ||
     action === "project:read" ||
     action === "runtime:manage" ||
@@ -753,7 +755,7 @@ export function authorizationService(db: Db) {
         : lowTrustDeny("Project is outside this low-trust boundary.");
     }
 
-    if (input.action === "issue:read" || input.action === "issue:mutate") {
+    if (input.action === "issue:read" || input.action === "issue:comment" || input.action === "issue:mutate") {
       if (input.resource.type !== "issue") {
         return lowTrustDeny("Low-trust issue access is missing an issue resource.");
       }
@@ -956,7 +958,10 @@ export function authorizationService(db: Db) {
               explanation: "Allowed by active cloud tenant company membership.",
             });
           }
-          if (input.action === "issue:mutate" && membership.membershipRole !== "viewer") {
+          if (
+            (input.action === "issue:comment" || input.action === "issue:mutate") &&
+            membership.membershipRole !== "viewer"
+          ) {
             return allow({
               action: input.action,
               reason: "allow_company_member",
@@ -997,6 +1002,7 @@ export function authorizationService(db: Db) {
         if (
           input.action === "agent:read" ||
           input.action === "company_scope:read" ||
+          input.action === "issue:comment" ||
           input.action === "issue:read" ||
           input.action === "project:read" ||
           input.action === "runtime:manage" ||
@@ -1006,7 +1012,9 @@ export function authorizationService(db: Db) {
           // Mirroring the tasks:assign carve-out above, viewers keep the
           // read-only visibility actions but not the privileged ones.
           const requiresNonViewer =
-            input.action === "runtime:manage" || input.action === "secrets:read";
+            input.action === "issue:comment" ||
+            input.action === "runtime:manage" ||
+            input.action === "secrets:read";
           if (membership && (!requiresNonViewer || membership.membershipRole !== "viewer")) {
             return allow({
               action: input.action,
@@ -1092,6 +1100,7 @@ export function authorizationService(db: Db) {
         input.action === "agent:read" ||
         input.action === "agent:wake" ||
         input.action === "company_scope:read" ||
+        input.action === "issue:comment" ||
         input.action === "issue:read" ||
         input.action === "project:read" ||
         input.action === "runtime:manage" ||
@@ -1104,6 +1113,7 @@ export function authorizationService(db: Db) {
     if (
       input.action === "agent:read" ||
       input.action === "company_scope:read" ||
+      input.action === "issue:comment" ||
       input.action === "issue:read" ||
       input.action === "project:read" ||
       input.action === "runtime:manage" ||

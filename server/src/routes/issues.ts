@@ -1775,7 +1775,7 @@ export function issueRoutes(
       assigneeUserId: string | null;
       status: string;
     },
-    action: "issue:read" | "issue:mutate",
+    action: "issue:comment" | "issue:read" | "issue:mutate",
   ) {
     return access.decide({
       actor: req.actor,
@@ -1802,6 +1802,13 @@ export function issueRoutes(
 
   async function assertIssueReadAllowed(req: Request, res: Response, issue: Parameters<typeof decideIssueAccess>[1]) {
     const decision = await decideIssueAccess(req, issue, "issue:read");
+    if (decision.allowed) return true;
+    res.status(403).json({ error: "Issue is outside this actor's authorization boundary" });
+    return false;
+  }
+
+  async function assertIssueCommentAllowed(req: Request, res: Response, issue: Parameters<typeof decideIssueAccess>[1]) {
+    const decision = await decideIssueAccess(req, issue, "issue:comment");
     if (decision.allowed) return true;
     res.status(403).json({ error: "Issue is outside this actor's authorization boundary" });
     return false;
@@ -2784,6 +2791,7 @@ export function issueRoutes(
         : continuationSummary;
 
     res.json({
+      serverTimeUtc: new Date().toISOString(),
       issue: {
         id: issue.id,
         identifier: issue.identifier,
@@ -6339,13 +6347,18 @@ export function issueRoutes(
         return;
       }
       assertCompanyAccess(req, issue.companyId);
-      assertBoard(req);
 
       const actor = getActorInfo(req);
-      const interaction = await issueThreadInteractionService(db).cancelQuestions(issue, interactionId, req.body, {
-        agentId: actor.agentId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      });
+      const interaction = await issueThreadInteractionService(db).cancelInteraction(
+        issue,
+        interactionId,
+        req.body,
+        {
+          agentId: actor.agentId,
+          userId: actor.actorType === "user" ? actor.actorId : null,
+        },
+        { canCancelAny: req.actor.type === "board" },
+      );
 
       await logActivity(db, {
         companyId: issue.companyId,
@@ -6624,7 +6637,10 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, issue.companyId);
-    if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    // Any same-company agent may post a plain comment (cross-boundary report-back).
+    // Mutation-style behaviors (reopen/resume) additionally require assignee ownership.
+    if (!(await assertIssueCommentAllowed(req, res, issue))) return;
+    if ((req.body.reopen === true || req.body.resume === true) && !(await assertAgentIssueMutationAllowed(req, res, issue))) return;
     if (!assertStructuredCommentFieldsAllowed(req, res, {
       presentation: req.body.presentation,
       metadata: req.body.metadata,

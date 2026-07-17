@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import {
   applyPendingMigrations,
+  ensureRuntimeLeastPrivilegeRole,
   inspectMigrations,
 } from "./client.js";
 import {
@@ -43,6 +44,43 @@ if (!embeddedPostgresSupport.supported) {
 }
 
 describeEmbeddedPostgres("applyPendingMigrations", () => {
+  it(
+    "denies direct agent API key writes to the runtime role",
+    async () => {
+      const connectionString = await createTempDatabase();
+      const adminUrl = new URL(connectionString);
+      adminUrl.pathname = "/postgres";
+      await ensureRuntimeLeastPrivilegeRole({
+        adminDatabaseUrl: adminUrl.toString(),
+        databaseName: "paperclip",
+        adminUser: "paperclip",
+        adminPassword: "paperclip",
+        runtimeUser: "paperclip_runtime_test",
+        runtimePassword: "paperclip-runtime-test",
+      });
+
+      const runtimeUrl = new URL(connectionString);
+      runtimeUrl.username = "paperclip_runtime_test";
+      runtimeUrl.password = "paperclip-runtime-test";
+      const runtimeSql = postgres(runtimeUrl.toString(), { max: 1, onnotice: () => {} });
+      try {
+        const privileges = await runtimeSql.unsafe<{ can_insert: boolean; can_update: boolean }[]>(
+          `SELECT
+            has_table_privilege(current_user, 'agent_api_keys', 'INSERT') AS can_insert,
+            has_table_privilege(current_user, 'agent_api_keys', 'UPDATE') AS can_update`,
+        );
+        expect(privileges[0]).toEqual({ can_insert: false, can_update: false });
+
+        await expect(runtimeSql.unsafe(`UPDATE agent_api_keys SET name = name`)).rejects.toMatchObject({
+          code: "42501",
+        });
+      } finally {
+        await runtimeSql.end();
+      }
+    },
+    20_000,
+  );
+
   it(
     "applies an inserted earlier migration without replaying later legacy migrations",
     async () => {

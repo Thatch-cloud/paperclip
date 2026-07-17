@@ -44,6 +44,8 @@ import type {
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
   IssueRelationIssueSummary,
+  IssueThreadInteractionKind,
+  IssueThreadInteractionResult,
   LowTrustBoundary,
   SuccessfulRunHandoffState,
 } from "@paperclipai/shared";
@@ -100,6 +102,17 @@ const ISSUE_COMMENT_RUN_LOG_DERIVATION_CHUNK_BYTES = 256_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_END_SLACK_MS = 60_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_MAX_PARALLEL_READS = 8;
 const DELETED_ISSUE_COMMENT_BODY = "";
+const TERMINAL_ISSUE_INTERACTION_EXPIRY_RESULTS = {
+  request_confirmation: { version: 1, outcome: "issue_terminal" },
+  request_checkbox_confirmation: { version: 1, outcome: "issue_terminal" },
+  ask_user_questions: { version: 1, answers: [], cancelled: true, cancellationReason: "Issue reached terminal status" },
+  suggest_tasks: { version: 1 },
+} satisfies Record<IssueThreadInteractionKind, IssueThreadInteractionResult>;
+
+const TERMINAL_ISSUE_INTERACTION_EXPIRY_ENTRIES = Object.entries(TERMINAL_ISSUE_INTERACTION_EXPIRY_RESULTS) as Array<[
+  IssueThreadInteractionKind,
+  IssueThreadInteractionResult,
+]>;
 function assertTransition(from: string, to: string) {
   if (from === to) return;
   if (!ALL_ISSUE_STATUSES.includes(to)) {
@@ -144,20 +157,12 @@ async function expirePendingInteractionsForTerminalIssue(
     eq(issueThreadInteractions.status, "pending"),
   );
 
-  await dbOrTx
-    .update(issueThreadInteractions)
-    .set({ ...baseSet, result: { version: 1, outcome: "issue_terminal" } })
-    .where(and(pendingOnIssue, inArray(issueThreadInteractions.kind, ["request_confirmation", "request_checkbox_confirmation"])));
-
-  await dbOrTx
-    .update(issueThreadInteractions)
-    .set({ ...baseSet, result: { version: 1, answers: [], cancelled: true, cancellationReason: "Issue reached terminal status" } })
-    .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, "ask_user_questions")));
-
-  await dbOrTx
-    .update(issueThreadInteractions)
-    .set({ ...baseSet, result: { version: 1 } })
-    .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, "suggest_tasks")));
+  for (const [kind, result] of TERMINAL_ISSUE_INTERACTION_EXPIRY_ENTRIES) {
+    await dbOrTx
+      .update(issueThreadInteractions)
+      .set({ ...baseSet, result })
+      .where(and(pendingOnIssue, eq(issueThreadInteractions.kind, kind)));
+  }
 }
 
 function readStringFromRecord(record: unknown, key: string) {
@@ -4488,6 +4493,64 @@ export function issueService(db: Db) {
           status: candidate.status,
           blockerIssueIds: readiness.blockerIssueIds,
         }));
+    },
+
+    clearResolvedBlockerFromDependent: async (dependentIssueId: string, resolvedBlockerIssueId: string) => {
+      return db.transaction(async (tx) => {
+        const dependent = await tx
+          .select({
+            id: issues.id,
+            companyId: issues.companyId,
+            status: issues.status,
+            assigneeAgentId: issues.assigneeAgentId,
+          })
+          .from(issues)
+          .where(eq(issues.id, dependentIssueId))
+          .for("update")
+          .then((rows) => rows[0] ?? null);
+        if (!dependent) return false;
+        if (!dependent.assigneeAgentId || ["backlog", "done", "cancelled"].includes(dependent.status)) {
+          return false;
+        }
+
+        await tx
+          .delete(issueRelations)
+          .where(
+            and(
+              eq(issueRelations.companyId, dependent.companyId),
+              eq(issueRelations.issueId, resolvedBlockerIssueId),
+              eq(issueRelations.relatedIssueId, dependent.id),
+              eq(issueRelations.type, "blocks"),
+            ),
+          );
+
+        const readiness = (await listIssueDependencyReadinessMap(tx, dependent.companyId, [dependent.id])).get(dependent.id)
+          ?? createIssueDependencyReadiness(dependent.id);
+        if (!readiness.isDependencyReady) {
+          return false;
+        }
+
+        if (readiness.blockerIssueIds.length > 0) {
+          await tx
+            .delete(issueRelations)
+            .where(
+              and(
+                eq(issueRelations.companyId, dependent.companyId),
+                inArray(issueRelations.issueId, readiness.blockerIssueIds),
+                eq(issueRelations.relatedIssueId, dependent.id),
+                eq(issueRelations.type, "blocks"),
+              ),
+            );
+        }
+
+        if (dependent.status === "blocked") {
+          await tx
+            .update(issues)
+            .set({ status: "todo", updatedAt: new Date() })
+            .where(eq(issues.id, dependent.id));
+        }
+        return true;
+      });
     },
 
     resolveBlockedDependents: async (blockerIssueId: string, logContext: Record<string, unknown> = {}) => {

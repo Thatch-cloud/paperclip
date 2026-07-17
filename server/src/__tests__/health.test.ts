@@ -4,7 +4,7 @@ import request from "supertest";
 import type { Db } from "@paperclipai/db";
 import { healthRoutes } from "../routes/health.js";
 import * as devServerStatus from "../dev-server-status.js";
-import { serverVersion } from "../version.js";
+import { deploymentVersion, serverVersion } from "../version.js";
 
 const mockReadPersistedDevServerStatus = vi.hoisted(() => vi.fn());
 
@@ -32,8 +32,51 @@ describe("GET /health", () => {
     const app = createApp();
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "ok", version: serverVersion });
+    expect(res.body).toEqual({
+      status: "ok",
+      version: serverVersion,
+      deployment: deploymentVersion,
+    });
   }, 15_000);
+
+  it("exposes the deployed control-plane ref in full health details", async () => {
+    const originalRef = process.env.PAPERCLIP_CONTROL_PLANE_REF;
+    const originalReleaseDir = process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR;
+    process.env.PAPERCLIP_CONTROL_PLANE_REF = "abc123";
+    process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR = "/tmp/paperclip-release";
+    vi.resetModules();
+    try {
+      const versionModule = await import("../version.js");
+      const routesModule = await import("../routes/health.js");
+      const app = express();
+      app.use("/health", routesModule.healthRoutes());
+
+      const res = await request(app).get("/health");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        status: "ok",
+        version: versionModule.serverVersion,
+        deployment: {
+          version: versionModule.serverVersion,
+          controlPlaneRef: "abc123",
+          controlPlaneReleaseDir: "/tmp/paperclip-release",
+        },
+      });
+    } finally {
+      if (originalRef === undefined) {
+        delete process.env.PAPERCLIP_CONTROL_PLANE_REF;
+      } else {
+        process.env.PAPERCLIP_CONTROL_PLANE_REF = originalRef;
+      }
+      if (originalReleaseDir === undefined) {
+        delete process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR;
+      } else {
+        process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR = originalReleaseDir;
+      }
+      vi.resetModules();
+    }
+  });
 
   it("returns 200 when the database probe succeeds", async () => {
     const db = {
@@ -60,13 +103,69 @@ describe("GET /health", () => {
     expect(res.body).toEqual({
       status: "unhealthy",
       version: serverVersion,
-      error: "database_unreachable"
+      deployment: deploymentVersion,
+      error: "database_unreachable",
     });
+  });
+
+  it("redacts deployment metadata for anonymous authenticated requests when the database probe fails", async () => {
+    const originalRef = process.env.PAPERCLIP_CONTROL_PLANE_REF;
+    const originalReleaseDir = process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR;
+    process.env.PAPERCLIP_CONTROL_PLANE_REF = "deadbeefcafe1234";
+    process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR =
+      "/home/thatch/.paperclip/control-plane/current";
+    vi.resetModules();
+    try {
+      const routesModule = await import("../routes/health.js");
+      const db = {
+        execute: vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED")),
+      } as unknown as Db;
+      const app = express();
+      app.use((req, _res, next) => {
+        (req as any).actor = { type: "none", source: "none" };
+        next();
+      });
+      app.use(
+        "/health",
+        routesModule.healthRoutes(db, {
+          deploymentMode: "authenticated",
+          deploymentExposure: "public",
+          authReady: true,
+          companyDeletionEnabled: false,
+        }),
+      );
+
+      const res = await request(app).get("/health");
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({
+        status: "unhealthy",
+        deploymentMode: "authenticated",
+        deploymentExposure: "public",
+        error: "database_unreachable",
+      });
+      expect(res.body).not.toHaveProperty("version");
+      expect(res.body).not.toHaveProperty("deployment");
+    } finally {
+      if (originalRef === undefined) {
+        delete process.env.PAPERCLIP_CONTROL_PLANE_REF;
+      } else {
+        process.env.PAPERCLIP_CONTROL_PLANE_REF = originalRef;
+      }
+      if (originalReleaseDir === undefined) {
+        delete process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR;
+      } else {
+        process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR = originalReleaseDir;
+      }
+      vi.resetModules();
+    }
   });
 
   it("redacts detailed metadata for anonymous requests in authenticated mode", async () => {
     const devServerStatus = await import("../dev-server-status.js");
-    vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(undefined);
+    vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(
+      undefined,
+    );
     const { healthRoutes } = await import("../routes/health.js");
     const db = {
       execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
@@ -105,7 +204,9 @@ describe("GET /health", () => {
 
   it("redacts detailed metadata when authenticated mode is reached without auth middleware", async () => {
     const devServerStatus = await import("../dev-server-status.js");
-    vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(undefined);
+    vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(
+      undefined,
+    );
     const { healthRoutes } = await import("../routes/health.js");
     const db = {
       execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
@@ -140,7 +241,9 @@ describe("GET /health", () => {
 
   it("keeps detailed metadata for authenticated requests in authenticated mode", async () => {
     const devServerStatus = await import("../dev-server-status.js");
-    vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(undefined);
+    vi.spyOn(devServerStatus, "readPersistedDevServerStatus").mockReturnValue(
+      undefined,
+    );
     const { healthRoutes } = await import("../routes/health.js");
     const db = {
       execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
@@ -152,7 +255,11 @@ describe("GET /health", () => {
     } as unknown as Db;
     const app = express();
     app.use((req, _res, next) => {
-      (req as any).actor = { type: "board", userId: "user-1", source: "session" };
+      (req as any).actor = {
+        type: "board",
+        userId: "user-1",
+        source: "session",
+      };
       next();
     });
     app.use(
@@ -171,6 +278,7 @@ describe("GET /health", () => {
     expect(res.body).toMatchObject({
       status: "ok",
       version: serverVersion,
+      deployment: deploymentVersion,
       deploymentMode: "authenticated",
       deploymentExposure: "public",
       authReady: true,

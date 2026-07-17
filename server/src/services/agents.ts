@@ -217,7 +217,8 @@ export function deduplicateAgentName(
   return `${candidateName} ${Date.now()}`;
 }
 
-export function agentService(db: Db) {
+export function agentService(db: Db, options: { keyManagementDb?: Db } = {}) {
+  const keyManagementDb = options.keyManagementDb ?? db;
   function currentUtcMonthWindow(now = new Date()) {
     const year = now.getUTCFullYear();
     const month = now.getUTCMonth();
@@ -569,7 +570,7 @@ export function agentService(db: Db) {
         })
         .where(eq(agents.id, id));
 
-      await db
+      await keyManagementDb
         .update(agentApiKeys)
         .set({ revokedAt: new Date() })
         .where(eq(agentApiKeys.agentId, id));
@@ -599,7 +600,7 @@ export function agentService(db: Db) {
         await tx.delete(issueComments).where(eq(issueComments.authorAgentId, id));
         await tx.delete(heartbeatRuns).where(eq(heartbeatRuns.agentId, id));
         await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.agentId, id));
-        await tx.delete(agentApiKeys).where(eq(agentApiKeys.agentId, id));
+        await keyManagementDb.delete(agentApiKeys).where(eq(agentApiKeys.agentId, id));
         await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.agentId, id));
         const deleted = await tx
           .delete(agents)
@@ -695,7 +696,7 @@ export function agentService(db: Db) {
 
       const token = createToken();
       const keyHash = hashToken(token);
-      const created = await db
+      const created = await keyManagementDb
         .insert(agentApiKeys)
         .values({
           agentId: id,
@@ -748,7 +749,7 @@ export function agentService(db: Db) {
         .then((rows) => rows[0] ?? null),
 
     revokeKey: async (agentId: string, keyId: string) => {
-      const rows = await db
+      const rows = await keyManagementDb
         .update(agentApiKeys)
         .set({ revokedAt: new Date() })
         .where(and(eq(agentApiKeys.id, keyId), eq(agentApiKeys.agentId, agentId)))

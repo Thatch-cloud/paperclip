@@ -99,9 +99,11 @@ async function authorizeUpgrade(
   url: URL,
   opts: {
     deploymentMode: DeploymentMode;
+    keyManagementDb?: Db;
     resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
   },
 ): Promise<UpgradeContext | null> {
+  const keyManagementDb = opts.keyManagementDb ?? db;
   const queryToken = url.searchParams.get("token")?.trim() ?? "";
   const authToken = parseBearerToken(req.headers.authorization);
   const token = authToken ?? (queryToken.length > 0 ? queryToken : null);
@@ -163,7 +165,7 @@ async function authorizeUpgrade(
     return null;
   }
 
-  await db
+  await keyManagementDb
     .update(agentApiKeys)
     .set({ lastUsedAt: new Date() })
     .where(eq(agentApiKeys.id, key.id));
@@ -180,6 +182,7 @@ export function setupLiveEventsWebSocketServer(
   db: Db,
   opts: {
     deploymentMode: DeploymentMode;
+    keyManagementDb?: Db;
     resolveSessionFromHeaders?: (headers: Headers) => Promise<BetterAuthSessionResult | null>;
   },
 ) {
@@ -248,6 +251,7 @@ export function setupLiveEventsWebSocketServer(
 
     void authorizeUpgrade(db, req, companyId, url, {
       deploymentMode: opts.deploymentMode,
+      keyManagementDb: opts.keyManagementDb,
       resolveSessionFromHeaders: opts.resolveSessionFromHeaders,
     })
       .then((context) => {

@@ -270,15 +270,26 @@ is_npm_tlog_duplicate_error() {
     grep -q "equivalent entry already exists in the transparency log" <<< "$output"
 }
 
+npm_trusted_publishing_available() {
+  [ "${GITHUB_ACTIONS:-}" = "true" ] &&
+    [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] &&
+    [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]
+}
+
 publish_package_to_npm() {
   local dist_tag="$1"
   local package_name="$2"
   local package_version="$3"
   local publish_log
+  local publish_command=(npm publish --tag "$dist_tag" --access public)
+
+  if npm_trusted_publishing_available; then
+    publish_command=(npm publish --tag "$dist_tag" --access public --provenance)
+  fi
 
   publish_log="$(mktemp "${TMPDIR:-/tmp}/paperclip-npm-publish.XXXXXX")"
 
-  if (set -o pipefail; pnpm publish --no-git-checks --tag "$dist_tag" --access public 2>&1 | tee "$publish_log"); then
+  if (set -o pipefail; "${publish_command[@]}" 2>&1 | tee "$publish_log"); then
     rm -f "$publish_log"
     return 0
   fi
@@ -303,7 +314,7 @@ publish_package_to_npm() {
   fi
 
   release_warn "Retrying ${package_name}@${package_version} once with npm provenance disabled."
-  if pnpm publish --no-git-checks --tag "$dist_tag" --access public --provenance=false; then
+  if npm publish --tag "$dist_tag" --access public --provenance=false; then
     rm -f "$publish_log"
     return 0
   fi
@@ -370,7 +381,17 @@ require_npm_publish_auth() {
     return
   fi
 
-  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  if npm_trusted_publishing_available; then
+    if ! node -e 'const [major, minor, patch] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && (minor > 14 || (minor === 14 && patch >= 0))) ? 0 : 1)' >/dev/null 2>&1; then
+      release_fail "GitHub Actions trusted publishing requires Node.js 22.14.0 or newer."
+    fi
+
+    local npm_version
+    npm_version="$(npm --version 2>/dev/null || true)"
+    if ! node -e 'const version = process.argv[1] || ""; const [major, minor, patch] = version.split(".").map(Number); process.exit(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))) ? 0 : 1)' "$npm_version" >/dev/null 2>&1; then
+      release_fail "GitHub Actions trusted publishing requires npm 11.5.1 or newer; found ${npm_version:-unknown}."
+    fi
+
     release_info "  ✓ npm publish auth will be provided by GitHub Actions trusted publishing"
     return
   fi

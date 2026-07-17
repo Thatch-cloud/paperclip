@@ -192,6 +192,58 @@ describe("issue dependency wakeups in issue routes", () => {
     });
   });
 
+  it("does not wake dependents when blocker repair finds a remaining blocker", async () => {
+    mockIssueService.getById.mockResolvedValue({
+      id: "issue-1",
+      companyId: "company-1",
+      identifier: "PAP-100",
+      title: "Finish blocker",
+      description: null,
+      status: "blocked",
+      priority: "medium",
+      parentId: null,
+      assigneeAgentId: "agent-1",
+      assigneeUserId: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+      executionWorkspaceId: null,
+      labels: [],
+      labelIds: [],
+    });
+    mockIssueService.update.mockResolvedValue({
+      id: "issue-1",
+      companyId: "company-1",
+      identifier: "PAP-100",
+      title: "Finish blocker",
+      description: null,
+      status: "done",
+      priority: "medium",
+      parentId: null,
+      assigneeAgentId: "agent-1",
+      assigneeUserId: null,
+      createdByAgentId: null,
+      createdByUserId: null,
+      executionWorkspaceId: null,
+      labels: [],
+      labelIds: [],
+    });
+    // resolveBlockedDependents returns [] — dependent still has a live blocker, repair skipped it
+    mockIssueService.resolveBlockedDependents.mockResolvedValue([]);
+
+    const res = await request(await createApp()).patch("/api/issues/issue-1").send({ status: "done" });
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(mockIssueService.resolveBlockedDependents).toHaveBeenCalledWith(
+        "issue-1",
+        expect.any(Object),
+      );
+    });
+    expect(mockWakeup).not.toHaveBeenCalledWith(
+      "agent-2",
+      expect.objectContaining({ reason: "issue_blockers_resolved" }),
+    );
+  });
+
   it("wakes the parent when all direct children become terminal", async () => {
     mockIssueService.getById.mockResolvedValue({
       id: "child-1",

@@ -14,6 +14,7 @@ import type { Request as ExpressRequest, RequestHandler } from "express";
 import { and, eq } from "drizzle-orm";
 import {
   createDb,
+  ensureRuntimeLeastPrivilegeRole,
   ensurePostgresDatabase,
   formatEmbeddedPostgresError,
   getPostgresDataDirectory,
@@ -28,6 +29,8 @@ import {
   companies,
   companyMemberships,
   instanceUserRoles,
+  postgresConnectionString,
+  resolveEmbeddedPostgresCredentials,
 } from "@paperclipai/db";
 import detectPort from "detect-port";
 import { createApp } from "./app.js";
@@ -336,6 +339,7 @@ export async function startServer(): Promise<StartedServer> {
   
     const dataDir = resolve(config.embeddedPostgresDataDir);
     const configuredPort = config.embeddedPostgresPort;
+    const credentials = resolveEmbeddedPostgresCredentials(dataDir);
     let port = configuredPort;
     const logBuffer = createEmbeddedPostgresLogBuffer(120);
     const verboseEmbeddedPostgresLogs = process.env.PAPERCLIP_EMBEDDED_POSTGRES_VERBOSE === "true";
@@ -402,7 +406,12 @@ export async function startServer(): Promise<StartedServer> {
     if (runningPid) {
       logger.warn(`Embedded PostgreSQL already running; reusing existing process (pid=${runningPid}, port=${port})`);
     } else {
-      const configuredAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${configuredPort}/postgres`;
+      const configuredAdminConnectionString = postgresConnectionString({
+        user: credentials.adminUser,
+        password: credentials.bootstrapAdminPassword,
+        port: configuredPort,
+        database: "postgres",
+      });
       try {
         const actualDataDir = await getPostgresDataDirectory(configuredAdminConnectionString);
         if (
@@ -424,8 +433,8 @@ export async function startServer(): Promise<StartedServer> {
         logger.info(`Using embedded PostgreSQL because no DATABASE_URL set (dataDir=${dataDir}, port=${port})`);
         embeddedPostgres = new EmbeddedPostgres({
           databaseDir: dataDir,
-          user: "paperclip",
-          password: "paperclip",
+          user: credentials.adminUser,
+          password: credentials.bootstrapAdminPassword,
           port,
           persistent: true,
           initdbFlags: ["--encoding=UTF8", "--locale=C", "--lc-messages=C"],
@@ -464,23 +473,53 @@ export async function startServer(): Promise<StartedServer> {
       }
     }
   
-    const embeddedAdminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/postgres`;
-    const dbStatus = await ensurePostgresDatabase(embeddedAdminConnectionString, "paperclip");
+    const embeddedBootstrapAdminConnectionString = postgresConnectionString({
+      user: credentials.adminUser,
+      password: credentials.bootstrapAdminPassword,
+      port,
+      database: "postgres",
+    });
+    const dbStatus = await ensurePostgresDatabase(embeddedBootstrapAdminConnectionString, "paperclip");
     if (dbStatus === "created") {
       logger.info("Created embedded PostgreSQL database: paperclip");
     }
   
-    const embeddedConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`;
+    const embeddedBootstrapMigrationConnectionString = postgresConnectionString({
+      user: credentials.adminUser,
+      password: credentials.bootstrapAdminPassword,
+      port,
+      database: "paperclip",
+    });
+    const embeddedMigrationConnectionString = postgresConnectionString({
+      user: credentials.adminUser,
+      password: credentials.adminPassword,
+      port,
+      database: "paperclip",
+    });
+    const embeddedConnectionString = postgresConnectionString({
+      user: credentials.runtimeUser,
+      password: credentials.runtimePassword,
+      port,
+      database: "paperclip",
+    });
     const shouldAutoApplyFirstRunMigrations = !clusterAlreadyInitialized || dbStatus === "created";
     if (shouldAutoApplyFirstRunMigrations) {
       logger.info("Detected first-run embedded PostgreSQL setup; applying pending migrations automatically");
     }
-    migrationSummary = await ensureMigrations(embeddedConnectionString, "Embedded PostgreSQL", {
+    migrationSummary = await ensureMigrations(embeddedBootstrapMigrationConnectionString, "Embedded PostgreSQL", {
       autoApply: shouldAutoApplyFirstRunMigrations,
+    });
+    await ensureRuntimeLeastPrivilegeRole({
+      adminDatabaseUrl: embeddedBootstrapAdminConnectionString,
+      databaseName: "paperclip",
+      adminUser: credentials.adminUser,
+      adminPassword: credentials.adminPassword,
+      runtimeUser: credentials.runtimeUser,
+      runtimePassword: credentials.runtimePassword,
     });
   
     db = createDb(embeddedConnectionString);
-    pluginMigrationDb = db;
+    pluginMigrationDb = createDb(embeddedMigrationConnectionString);
     logger.info("Embedded PostgreSQL ready");
     activeDatabaseConnectionString = embeddedConnectionString;
     resolvedEmbeddedPostgresPort = port;
@@ -660,6 +699,7 @@ export async function startServer(): Promise<StartedServer> {
     bindHost: config.host,
     authReady,
     companyDeletionEnabled: config.companyDeletionEnabled,
+    agentKeyManagementDb: pluginMigrationDb as any,
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
     resolveSession,
@@ -700,6 +740,7 @@ export async function startServer(): Promise<StartedServer> {
   
   setupLiveEventsWebSocketServer(server, db as any, {
     deploymentMode: config.deploymentMode,
+    keyManagementDb: pluginMigrationDb as any,
     resolveSessionFromHeaders,
   });
 
@@ -812,6 +853,11 @@ export async function startServer(): Promise<StartedServer> {
         logger.warn({ ...swept }, "startup stale-lock sweeper cleared issue locks");
       }
 
+      const frozenRepaired = await heartbeat.reconcileFrozenBlockedDependents();
+      if (frozenRepaired.repaired > 0) {
+        logger.warn({ ...frozenRepaired }, "startup frozen-blocked-dependent reconcile re-armed issues");
+      }
+
       const reviewed = await heartbeat.reconcileProductivityReviews();
       if (reviewed.created > 0 || reviewed.updated > 0 || reviewed.failed > 0) {
         logger.warn({ ...reviewed }, "startup productivity reconciliation created or updated review work");
@@ -881,6 +927,12 @@ export async function startServer(): Promise<StartedServer> {
           const swept = await heartbeat.sweepStaleIssueLocks();
           if (swept.cleared > 0) {
             logger.warn({ ...swept }, "periodic stale-lock sweeper cleared issue locks");
+          }
+        })
+        .then(async () => {
+          const frozenRepaired = await heartbeat.reconcileFrozenBlockedDependents();
+          if (frozenRepaired.repaired > 0) {
+            logger.warn({ ...frozenRepaired }, "periodic frozen-blocked-dependent reconcile re-armed issues");
           }
         })
         .then(async () => {

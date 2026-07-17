@@ -4007,6 +4007,126 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return result;
   }
 
+  // Startup/periodic sweep: find already-frozen blocked dependents whose blockers
+  // are all done and re-arm them. Scoped to opts.companyId when provided;
+  // otherwise scans all tenants. Capped at 500 candidates per call to bound
+  // the scan on large deployments.
+  async function reconcileFrozenBlockedDependents(opts?: { companyId?: string }) {
+    const candidates = await db
+      .select({
+        id: issues.id,
+        companyId: issues.companyId,
+        assigneeAgentId: issues.assigneeAgentId,
+      })
+      .from(issues)
+      .where(
+        and(
+          opts?.companyId ? eq(issues.companyId, opts.companyId) : undefined,
+          eq(issues.status, "blocked"),
+          sql`${issues.assigneeAgentId} IS NOT NULL`,
+        ),
+      )
+      .limit(500);
+
+    const result = {
+      repaired: 0,
+      skipped: 0,
+      issueIds: [] as string[],
+    };
+
+    if (candidates.length === 0) return result;
+
+    // Group by company so the readiness check can be batched per company.
+    const byCompany = new Map<string, typeof candidates>();
+    for (const c of candidates) {
+      const list = byCompany.get(c.companyId) ?? [];
+      list.push(c);
+      byCompany.set(c.companyId, list);
+    }
+
+    for (const [companyId, group] of byCompany) {
+      const issueIds = group.map((c) => c.id);
+      const readinessMap = await issuesSvc.listDependencyReadiness(companyId, issueIds);
+
+      for (const candidate of group) {
+        const readiness = readinessMap.get(candidate.id);
+        // Skip if not ready (some blocker still unresolved or finalize pending)
+        // or if it has no recorded blocker edges at all (already cleared).
+        if (!readiness?.isDependencyReady || readiness.blockerIssueIds.length === 0) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const agentId = candidate.assigneeAgentId!;
+
+        // Skip if an execution path is already armed or a wake is queued.
+        if (
+          await hasActiveExecutionPath(companyId, candidate.id) ||
+          await hasQueuedIssueWake(companyId, candidate.id) ||
+          await isAutomaticRecoverySuppressedByPauseHold(db, companyId, candidate.id, treeControlSvc)
+        ) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const agent = await getAgent(agentId);
+        if (!agent || agent.companyId !== companyId || !(await isAgentInvokable(agent))) {
+          result.skipped += 1;
+          continue;
+        }
+
+        try {
+          // Re-check readiness inside a FOR UPDATE transaction and clear only
+          // the stale edges atomically. If a concurrent blocker was inserted
+          // between the outer readiness check and this call, the tx re-reads
+          // under lock and returns false — no spurious unblock or wakeup.
+          const repaired = await issuesSvc.clearResolvedBlockerFromDependent(
+            candidate.id,
+            readiness.blockerIssueIds[0],
+          );
+
+          if (!repaired) {
+            result.skipped += 1;
+            continue;
+          }
+
+          await deps.enqueueWakeup(agentId, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "issue_blockers_resolved",
+            payload: {
+              issueId: candidate.id,
+              blockerIssueIds: readiness.blockerIssueIds,
+            },
+            contextSnapshot: {
+              issueId: candidate.id,
+              taskId: candidate.id,
+              wakeReason: "issue_blockers_resolved",
+              source: "reconcile.frozen_blocked_dependents",
+              blockerIssueIds: readiness.blockerIssueIds,
+            },
+          });
+
+          result.repaired += 1;
+          result.issueIds.push(candidate.id);
+
+          logger.info(
+            { issueId: candidate.id, agentId, blockerIssueIds: readiness.blockerIssueIds },
+            "reconcileFrozenBlockedDependents: repaired frozen blocked dependent",
+          );
+        } catch (err) {
+          logger.warn(
+            { err, issueId: candidate.id, agentId },
+            "reconcileFrozenBlockedDependents: failed to repair frozen blocked dependent",
+          );
+          result.skipped += 1;
+        }
+      }
+    }
+
+    return result;
+  }
+
   return {
     buildRunOutputSilence,
     escalateStrandedRecoveryIssueInPlace,
@@ -4014,6 +4134,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     recordWatchdogDecision,
     scanSilentActiveRuns,
     reconcileStrandedAssignedIssues,
+    reconcileFrozenBlockedDependents,
     sweepStaleIssueLocks,
     buildIssueGraphLivenessAutoRecoveryPreview,
     reconcileIssueGraphLiveness,

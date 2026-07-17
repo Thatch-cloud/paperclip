@@ -129,7 +129,7 @@ function readRunIssueId(context: Record<string, unknown> | null) {
 
 export function agentRoutes(
   db: Db,
-  options: { pluginWorkerManager?: PluginWorkerManager } = {},
+  options: { pluginWorkerManager?: PluginWorkerManager; keyManagementDb?: Db } = {},
 ) {
   // Legacy hardcoded maps — used as fallback when adapter module does not
   // declare capability flags explicitly.
@@ -171,7 +171,8 @@ export function agentRoutes(
   ] as const;
 
   const router = Router();
-  const svc = agentService(db);
+  const svc = agentService(db, { keyManagementDb: options.keyManagementDb });
+  const keyManagementSvc = options.keyManagementDb ? agentService(options.keyManagementDb) : svc;
   const access = accessService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
@@ -3107,7 +3108,7 @@ export function agentRoutes(
     if (!agent) {
       return;
     }
-    const key = await svc.createApiKey(id, req.body);
+    const key = await keyManagementSvc.createApiKey(id, req.body);
 
     await logActivity(db, {
       companyId: agent.companyId,
@@ -3137,7 +3138,7 @@ export function agentRoutes(
       return;
     }
 
-    const revoked = await svc.revokeKey(agent.id, keyId);
+    const revoked = await keyManagementSvc.revokeKey(agent.id, keyId);
     if (!revoked) {
       res.status(404).json({ error: "Key not found" });
       return;

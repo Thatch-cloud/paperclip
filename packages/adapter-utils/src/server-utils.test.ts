@@ -621,6 +621,7 @@ describe("renderPaperclipWakePrompt", () => {
 
   it("adds the execution contract to scoped wake prompts", () => {
     const prompt = renderPaperclipWakePrompt({
+      serverTimeUtc: "2026-07-16T20:30:09.000Z",
       reason: "issue_assigned",
       issue: {
         id: "issue-1",
@@ -643,6 +644,9 @@ describe("renderPaperclipWakePrompt", () => {
     expect(prompt).toContain("evidence, not valid liveness paths by themselves");
     expect(prompt).toContain("Use child issues for long or parallel delegated work instead of polling");
     expect(prompt).toContain("named unblock owner/action");
+    expect(prompt).toContain("- server time UTC: 2026-07-16T20:30:09.000Z");
+    expect(prompt).toContain("use `serverTimeUtc` for all freshness/staleness comparisons");
+    expect(prompt).toContain("`live-runs: []` does not prove a future scheduled retry is dead");
   });
 
   it("preserves Chinese, Japanese, and Hindi issue and comment text in scoped wake prompts", () => {

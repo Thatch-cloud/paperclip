@@ -32,9 +32,13 @@ import type { StorageService } from "../storage/types.js";
 import { assertBoard, assertCompanyAccess, assertInstanceAdmin, getActorInfo } from "./authz.js";
 import { COMPANY_IMPORT_ROUTE_PATH } from "./company-import-paths.js";
 
-export function companyRoutes(db: Db, storage?: StorageService) {
+export function companyRoutes(
+  db: Db,
+  storage?: StorageService,
+  options: { keyManagementDb?: Db } = {},
+) {
   const router = Router();
-  const svc = companyService(db);
+  const svc = companyService(db, { keyManagementDb: options.keyManagementDb });
   const agents = agentService(db);
   const portability = companyPortabilityService(db, storage);
   const access = accessService(db);

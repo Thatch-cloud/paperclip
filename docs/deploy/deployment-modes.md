@@ -86,3 +86,36 @@ Runtime override via environment variable:
 ```sh
 PAPERCLIP_DEPLOYMENT_MODE=authenticated PAPERCLIP_BIND=lan pnpm paperclipai run
 ```
+
+## Deterministic Native Control-Plane Deploys
+
+For a long-running native `paperclip.service`, do not point systemd directly at a mutable agent checkout. Deploy an exact commit into a detached release worktree and start through the guard script:
+
+```sh
+cd /home/thatch/Documents/oasthaus/paperclip
+scripts/deploy-control-plane.sh origin/master
+systemctl --user daemon-reload
+systemctl --user restart paperclip.service
+```
+
+The deploy command resolves the requested ref to a SHA, creates `~/.paperclip/control-plane/releases/<sha>`, updates `~/.paperclip/control-plane/current`, and writes `~/.paperclip/control-plane/deploy.env` with the intended `PAPERCLIP_CONTROL_PLANE_REF`. The start script fails closed if `current` is not a git checkout at that exact SHA or if the release marker disagrees.
+
+Use this shape for the user service:
+
+```ini
+[Service]
+WorkingDirectory=/home/thatch/.paperclip/control-plane/current
+EnvironmentFile=/home/thatch/.paperclip/instances/default/.env
+EnvironmentFile=/home/thatch/.paperclip/control-plane/deploy.env
+ExecStart=/home/thatch/.paperclip/control-plane/current/scripts/start-control-plane.sh run --bind lan
+```
+
+Operators can inspect the running and pending refs without a behavioral canary:
+
+```sh
+cat ~/.paperclip/control-plane/deploy.env
+readlink -f ~/.paperclip/control-plane/current
+curl -sS http://127.0.0.1:3100/api/health | jq '.deployment'
+```
+
+Lag is explicit: a merged backend fix is pending when `git -C /home/thatch/Documents/oasthaus/paperclip rev-parse origin/master` differs from `PAPERCLIP_CONTROL_PLANE_REF` in `deploy.env` or from `.deployment.controlPlaneRef` on `/api/health`.
