@@ -89,6 +89,20 @@ describe("redaction", () => {
     expect(result).not.toContain(jwt);
   });
 
+  it("redacts connection URL credentials and seed passwords from env output", () => {
+    const input = [
+      "THATCH_PRIMARY_STORE=postgres://user:password@host/db",
+      "THATCH_ADMIN_SEED_PASSWORD=fake-admin-seed-password",
+    ].join("\n");
+
+    const result = redactSensitiveText(input);
+
+    expect(result).toContain(`THATCH_PRIMARY_STORE=postgres://${REDACTED_EVENT_VALUE}@host/db`);
+    expect(result).toContain(`THATCH_ADMIN_SEED_PASSWORD=${REDACTED_EVENT_VALUE}`);
+    expect(result).not.toContain("user:password");
+    expect(result).not.toContain("fake-admin-seed-password");
+  });
+
   it("redacts inline secrets from command metadata without hiding safe command text", () => {
     const input = {
       command: "custom-acp --token ghp_example_secret env OPENAI_API_KEY=sk-live-example custom-acp",

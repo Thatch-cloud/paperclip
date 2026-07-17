@@ -38,4 +38,20 @@ describe("compactRunLogChunk", () => {
     expect(compacted).not.toContain("paperclip-json-secret");
     expect(compacted).not.toContain("paperclip-flag-secret");
   });
+
+  it("redacts secret-bearing env output before persisting run-log chunks", () => {
+    const chunk = [
+      "THATCH_PRIMARY_STORE=postgres://user:password@host/db",
+      "THATCH_ADMIN_SEED_PASSWORD=fake-admin-seed-password",
+      "THATCH_PUBLIC_ENDPOINT=https://host/healthz",
+    ].join("\n");
+
+    const compacted = compactRunLogChunk(chunk);
+
+    expect(compacted).toContain("THATCH_PRIMARY_STORE=postgres://***REDACTED***@host/db");
+    expect(compacted).toContain("THATCH_ADMIN_SEED_PASSWORD=***REDACTED***");
+    expect(compacted).toContain("THATCH_PUBLIC_ENDPOINT=https://host/healthz");
+    expect(compacted).not.toContain("user:password");
+    expect(compacted).not.toContain("fake-admin-seed-password");
+  });
 });

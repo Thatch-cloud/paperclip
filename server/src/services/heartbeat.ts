@@ -11446,9 +11446,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         store: run.logStore,
         logRef: run.logRef,
         ...result,
-        // Run-log chunks are already redacted before they are appended to the store.
-        // Rewriting the full chunk again on every poll creates avoidable string copies.
-        content: result.content,
+        // Persisted chunks are redacted on append; repeat on read as defense in depth
+        // for older logs or externally written log bytes before transcript rendering.
+        content: redactSensitiveText(result.content),
       };
     },
 
