@@ -281,7 +281,7 @@ publish_package_to_npm() {
   local package_name="$2"
   local package_version="$3"
   local publish_log
-  local publish_command=(pnpm publish --no-git-checks --tag "$dist_tag" --access public)
+  local publish_command=(npm publish --tag "$dist_tag" --access public)
 
   if npm_trusted_publishing_available; then
     publish_command=(npm publish --tag "$dist_tag" --access public --provenance)
@@ -314,7 +314,7 @@ publish_package_to_npm() {
   fi
 
   release_warn "Retrying ${package_name}@${package_version} once with npm provenance disabled."
-  if pnpm publish --no-git-checks --tag "$dist_tag" --access public --provenance=false; then
+  if npm publish --tag "$dist_tag" --access public --provenance=false; then
     rm -f "$publish_log"
     return 0
   fi
@@ -382,6 +382,16 @@ require_npm_publish_auth() {
   fi
 
   if npm_trusted_publishing_available; then
+    if ! node -e 'const [major, minor, patch] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && (minor > 14 || (minor === 14 && patch >= 0))) ? 0 : 1)' >/dev/null 2>&1; then
+      release_fail "GitHub Actions trusted publishing requires Node.js 22.14.0 or newer."
+    fi
+
+    local npm_version
+    npm_version="$(npm --version 2>/dev/null || true)"
+    if ! node -e 'const version = process.argv[1] || ""; const [major, minor, patch] = version.split(".").map(Number); process.exit(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))) ? 0 : 1)' "$npm_version" >/dev/null 2>&1; then
+      release_fail "GitHub Actions trusted publishing requires npm 11.5.1 or newer; found ${npm_version:-unknown}."
+    fi
+
     release_info "  ✓ npm publish auth will be provided by GitHub Actions trusted publishing"
     return
   fi
