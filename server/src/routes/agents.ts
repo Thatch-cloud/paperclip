@@ -171,7 +171,7 @@ export function agentRoutes(
   ] as const;
 
   const router = Router();
-  const svc = agentService(db);
+  const svc = agentService(db, { keyManagementDb: options.keyManagementDb });
   const keyManagementSvc = options.keyManagementDb ? agentService(options.keyManagementDb) : svc;
   const access = accessService(db);
   const approvalsSvc = approvalService(db);

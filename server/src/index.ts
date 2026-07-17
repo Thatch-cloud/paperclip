@@ -740,6 +740,7 @@ export async function startServer(): Promise<StartedServer> {
   
   setupLiveEventsWebSocketServer(server, db as any, {
     deploymentMode: config.deploymentMode,
+    keyManagementDb: pluginMigrationDb as any,
     resolveSessionFromHeaders,
   });
 

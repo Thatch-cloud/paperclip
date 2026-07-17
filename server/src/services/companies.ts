@@ -48,7 +48,8 @@ const SYSTEM_COMPANY_ACTOR: CompanyActivityActor = {
   runId: null,
 };
 
-export function companyService(db: Db) {
+export function companyService(db: Db, options: { keyManagementDb?: Db } = {}) {
+  const keyManagementDb = options.keyManagementDb ?? db;
   const ISSUE_PREFIX_FALLBACK = "CMP";
   const environmentsSvc = environmentService(db);
   const heartbeat = heartbeatService(db);
@@ -439,7 +440,7 @@ export function companyService(db: Db) {
         await tx.delete(activityLog).where(eq(activityLog.companyId, id));
         await tx.delete(heartbeatRuns).where(eq(heartbeatRuns.companyId, id));
         await tx.delete(agentWakeupRequests).where(eq(agentWakeupRequests.companyId, id));
-        await tx.delete(agentApiKeys).where(eq(agentApiKeys.companyId, id));
+        await keyManagementDb.delete(agentApiKeys).where(eq(agentApiKeys.companyId, id));
         await tx.delete(agentRuntimeState).where(eq(agentRuntimeState.companyId, id));
         await tx.delete(issueComments).where(eq(issueComments.companyId, id));
         await tx.delete(costEvents).where(eq(costEvents.companyId, id));
