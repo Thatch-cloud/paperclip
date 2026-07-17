@@ -7,7 +7,7 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
-import { actorMiddleware } from "../middleware/auth.js";
+import { actorMiddleware, isPermissionDeniedError } from "../middleware/auth.js";
 import { errorHandler } from "../middleware/index.js";
 import { dashboardRoutes } from "../routes/dashboard.js";
 import { assertCompanyAccess } from "../routes/authz.js";
@@ -137,5 +137,21 @@ describeEmbeddedPostgres("agent API key scope and expiry authz", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({ ok: true })
       .expect(200);
+  });
+
+  it("recognizes wrapped Postgres permission errors from agent key usage touches", () => {
+    const postgresError = Object.assign(
+      new Error("permission denied for table agent_api_keys"),
+      {
+        code: "42501",
+      },
+    );
+    const drizzleError = new Error(
+      'Failed query: update "agent_api_keys" set "last_used_at" = $1 where "agent_api_keys"."id" = $2: permission denied for table agent_api_keys',
+      { cause: postgresError },
+    );
+
+    expect(isPermissionDeniedError(drizzleError)).toBe(true);
+    expect(isPermissionDeniedError(new Error("connection refused"))).toBe(false);
   });
 });

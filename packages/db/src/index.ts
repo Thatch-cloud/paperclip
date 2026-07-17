@@ -2,6 +2,7 @@ export {
   createDb,
   getPostgresDataDirectory,
   ensurePostgresDatabase,
+  ensureRuntimeLeastPrivilegeRole,
   inspectMigrations,
   applyPendingMigrations,
   reconcilePendingMigrationHistory,
@@ -11,6 +12,11 @@ export {
   type MigrationBootstrapResult,
   type Db,
 } from "./client.js";
+export {
+  postgresConnectionString,
+  resolveEmbeddedPostgresCredentials,
+  type EmbeddedPostgresCredentials,
+} from "./embedded-postgres-credentials.js";
 export {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
