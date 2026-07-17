@@ -9,6 +9,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { actorMiddleware, isPermissionDeniedError } from "../middleware/auth.js";
 import { errorHandler } from "../middleware/index.js";
+import { agentRoutes } from "../routes/agents.js";
 import { dashboardRoutes } from "../routes/dashboard.js";
 import { assertCompanyAccess } from "../routes/authz.js";
 
@@ -65,16 +66,20 @@ describeEmbeddedPostgres("agent API key scope and expiry authz", () => {
       runtimeConfig: {},
       permissions: {},
     });
-    await db.insert(agentApiKeys).values({
-      agentId,
-      companyId,
-      name: "probe",
-      keyHash: hashToken(input.token),
-      scopes: input.scopes,
-      expiresAt: input.expiresAt,
-    });
+    const key = await db
+      .insert(agentApiKeys)
+      .values({
+        agentId,
+        companyId,
+        name: "probe",
+        keyHash: hashToken(input.token),
+        scopes: input.scopes,
+        expiresAt: input.expiresAt,
+      })
+      .returning({ id: agentApiKeys.id })
+      .then((rows) => rows[0]);
 
-    return { companyId, agentId };
+    return { companyId, agentId, keyId: key.id };
   }
 
   function createApp() {
@@ -86,6 +91,18 @@ describeEmbeddedPostgres("agent API key scope and expiry authz", () => {
       assertCompanyAccess(req, req.params.companyId as string);
       res.json({ ok: true });
     });
+    app.use(errorHandler);
+    return app;
+  }
+
+  function createLocalBoardApp() {
+    const app = express();
+    app.use(express.json());
+    app.use(actorMiddleware(db, { deploymentMode: "local_trusted" }));
+    app.get("/api/probe", (_req, res) => {
+      res.json({ ok: true });
+    });
+    app.use("/api", agentRoutes(db));
     app.use(errorHandler);
     return app;
   }
@@ -153,5 +170,30 @@ describeEmbeddedPostgres("agent API key scope and expiry authz", () => {
 
     expect(isPermissionDeniedError(drizzleError)).toBe(true);
     expect(isPermissionDeniedError(new Error("connection refused"))).toBe(false);
+  });
+
+  it("surfaces agent API key lastUsedAt after key authentication", async () => {
+    const token = "pc_last_used_test_key";
+    const { agentId, keyId } = await seedAgentKey({
+      token,
+      scopes: ["read"],
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const app = createLocalBoardApp();
+
+    const beforeUse = Date.now();
+    await request(app).get("/api/probe").set("Authorization", `Bearer ${token}`).expect(200);
+
+    const res = await request(app).get(`/api/agents/${agentId}/keys`).expect(200);
+
+    expect(res.body).toEqual([
+      expect.objectContaining({
+        id: keyId,
+        name: "probe",
+        lastUsedAt: expect.any(String),
+      }),
+    ]);
+    expect(res.body[0]).not.toHaveProperty("keyHash");
+    expect(new Date(res.body[0].lastUsedAt).getTime()).toBeGreaterThanOrEqual(beforeUse);
   });
 });
