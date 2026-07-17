@@ -72,6 +72,10 @@ exit 1
     `#!/usr/bin/env bash
 set -euo pipefail
 printf 'npm %s\\n' "$*" >> "$FAKE_CALL_LOG"
+if [ "$1" = "publish" ] && [ "$NPM_PUBLISH_MODE" = "success" ]; then
+  echo "published with npm"
+  exit 0
+fi
 if [ "$1" = "view" ] && [ "$NPM_VERSION_EXISTS" = "true" ]; then
   echo "1.2.3"
   exit 0
@@ -98,6 +102,7 @@ publish_package_to_npm ${distTag} @paperclipai/example 1.2.3
         PATH: `${binDir}:${process.env.PATH}`,
         FAKE_CALL_LOG: callLog,
         FAKE_STATE_DIR: stateDir,
+        NPM_PUBLISH_MODE: trustedPublishing ? "success" : "failure",
         NPM_VERSION_EXISTS: npmVersionExists ? "true" : "false",
         PNPM_MODE: pnpmMode,
         REPO_ROOT: fixtureDir,
@@ -128,11 +133,12 @@ test("publish_package_to_npm returns after a successful pnpm publish", () => {
   assert.doesNotMatch(result.calls, /--provenance=false/);
 });
 
-test("publish_package_to_npm enables provenance when GitHub Actions OIDC is available", () => {
+test("publish_package_to_npm uses npm provenance when GitHub Actions OIDC is available", () => {
   const result = runPublishHelper({ pnpmMode: "success", trustedPublishing: true });
 
   assert.equal(result.status, 0);
-  assert.match(result.calls, /^pnpm publish --no-git-checks --tag canary --access public --provenance$/m);
+  assert.match(result.calls, /^npm publish --tag canary --access public --provenance$/m);
+  assert.doesNotMatch(result.calls, /^pnpm publish/m);
 });
 
 test("publish_package_to_npm retries duplicate tlog failures without provenance", () => {

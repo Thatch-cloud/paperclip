@@ -281,15 +281,15 @@ publish_package_to_npm() {
   local package_name="$2"
   local package_version="$3"
   local publish_log
-  local publish_args=(publish --no-git-checks --tag "$dist_tag" --access public)
+  local publish_command=(pnpm publish --no-git-checks --tag "$dist_tag" --access public)
 
   if npm_trusted_publishing_available; then
-    publish_args+=(--provenance)
+    publish_command=(npm publish --tag "$dist_tag" --access public --provenance)
   fi
 
   publish_log="$(mktemp "${TMPDIR:-/tmp}/paperclip-npm-publish.XXXXXX")"
 
-  if (set -o pipefail; pnpm "${publish_args[@]}" 2>&1 | tee "$publish_log"); then
+  if (set -o pipefail; "${publish_command[@]}" 2>&1 | tee "$publish_log"); then
     rm -f "$publish_log"
     return 0
   fi
