@@ -727,6 +727,7 @@ export function agentService(db: Db, options: { keyManagementDb?: Db } = {}) {
           createdAt: agentApiKeys.createdAt,
           scopes: agentApiKeys.scopes,
           expiresAt: agentApiKeys.expiresAt,
+          lastUsedAt: agentApiKeys.lastUsedAt,
           revokedAt: agentApiKeys.revokedAt,
         })
         .from(agentApiKeys)
@@ -742,6 +743,7 @@ export function agentService(db: Db, options: { keyManagementDb?: Db } = {}) {
           createdAt: agentApiKeys.createdAt,
           scopes: agentApiKeys.scopes,
           expiresAt: agentApiKeys.expiresAt,
+          lastUsedAt: agentApiKeys.lastUsedAt,
           revokedAt: agentApiKeys.revokedAt,
         })
         .from(agentApiKeys)
