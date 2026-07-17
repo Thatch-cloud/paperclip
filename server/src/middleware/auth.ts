@@ -14,6 +14,24 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+export function isPermissionDeniedError(error: unknown) {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (typeof current === "object" && current !== null && !seen.has(current)) {
+    seen.add(current);
+    const maybe = current as { code?: unknown; message?: unknown; cause?: unknown };
+    if (maybe.code === "42501") return true;
+    if (
+      typeof maybe.message === "string" &&
+      maybe.message.includes("permission denied for table agent_api_keys")
+    ) {
+      return true;
+    }
+    current = maybe.cause;
+  }
+  return false;
+}
+
 interface ActorMiddlewareOptions {
   deploymentMode: DeploymentMode;
   resolveSession?: (req: Request) => Promise<BetterAuthSessionResult | null>;
@@ -183,8 +201,7 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         .set({ lastUsedAt: new Date() })
         .where(eq(agentApiKeys.id, key.id));
     } catch (error) {
-      const code = (error as { code?: unknown })?.code;
-      if (code !== "42501") throw error;
+      if (!isPermissionDeniedError(error)) throw error;
     }
 
     const agentRecord = await db
