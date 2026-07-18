@@ -25,6 +25,7 @@ vi.mock("@/lib/router", () => ({
 
 import { ArtifactCard } from "./ArtifactCard";
 import type { CompanyArtifact } from "@/api/artifacts";
+import { formatDate } from "@/lib/utils";
 
 function makeArtifact(overrides: Partial<CompanyArtifact> = {}): CompanyArtifact {
   return {
@@ -58,25 +59,26 @@ describe("ArtifactCard", () => {
     expect(markup).toContain("Hero shot");
     expect(markup).toContain("flex h-7 items-start justify-between gap-2");
     expect(markup).toContain("leading-7");
-    expect(markup).toContain("Last edited Jun 1, 2026");
+    expect(markup).toContain(`Last edited ${formatDate("2026-06-01T00:00:00.000Z")}`);
     expect(markup).not.toContain("Landing visuals");
     expect(markup).not.toContain("Edited ");
   });
 
   it("renders only the artifact subject and absolute metadata under the preview", () => {
+    const updatedAt = "2025-10-08T12:00:00.000Z";
     const markup = renderToStaticMarkup(
       <ArtifactCard
         artifact={makeArtifact({
           title: "Social launch clip",
           issue: { id: "issue-2", identifier: "PAP-10370", title: "Make artifact page look like this" },
-          updatedAt: "2025-10-08T12:00:00.000Z",
+          updatedAt,
           createdByAgent: null,
         })}
       />,
     );
 
     expect(markup).toContain("Social launch clip");
-    expect(markup).toContain("Last edited Oct 8, 2025");
+    expect(markup).toContain(`Last edited ${formatDate(updatedAt)}`);
     expect(markup).not.toContain("Make artifact page look like this");
     expect(markup).not.toContain(">PAP-10370<");
   });
