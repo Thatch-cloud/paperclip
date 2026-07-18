@@ -23,6 +23,10 @@ test('passes when file under tests/ is changed', () => {
   assert.equal(checkTestCoverage(makeFiles(['tests/unit/baz.ts']), 'fix: bug').passed, true);
 });
 
+test('passes when Python test script is changed', () => {
+  assert.equal(checkTestCoverage(makeFiles(['scripts/test-poller.py']), 'fix: bug').passed, true);
+});
+
 test('passes when file under __tests__ is changed', () => {
   assert.equal(checkTestCoverage(makeFiles(['src/__tests__/qux.ts']), 'fix: bug').passed, true);
 });
