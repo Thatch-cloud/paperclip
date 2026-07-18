@@ -1,0 +1,73 @@
+#!/bin/sh
+set -eu
+
+repo=/srv/git/Thatch.Server.git
+remote=git@github.com:Thatch-cloud/Thatch.Server.git
+secret_namespace=thatch-monitoring
+secret_name=thatch-gitops-mirror-github-ssh
+key_name=id_ed25519
+run_dir=/run/thatch-gitops-mirror-sync
+lock=/run/thatch-gitops-mirror-sync.lock
+
+preflight_mirror_repo() {
+  chown -R thatch:thatch "$repo"
+  find "$repo" -type d -exec chmod 2775 {} +
+  find "$repo" -type f -exec chmod g+rw {} +
+  sudo -u thatch git --git-dir="$repo" config gc.auto 0
+  sudo -u thatch git --git-dir="$repo" config maintenance.auto false
+}
+
+read_deploy_key() {
+  if ! secret_data=$(kubectl -n "$secret_namespace" get secret "$secret_name" -o "jsonpath={.data.$key_name}"); then
+    printf >&2 'failed to read deploy key secret data: namespace=%s secret=%s key=%s\n' "$secret_namespace" "$secret_name" "$key_name"
+    exit 1
+  fi
+
+  if [ -z "$secret_data" ]; then
+    printf >&2 'missing deploy key secret data: namespace=%s secret=%s key=%s\n' "$secret_namespace" "$secret_name" "$key_name"
+    exit 1
+  fi
+
+  if ! base64 -d > "$key_file" <<EOF
+$secret_data
+EOF
+  then
+    printf >&2 'failed to decode deploy key secret data: namespace=%s secret=%s key=%s\n' "$secret_namespace" "$secret_name" "$key_name"
+    exit 1
+  fi
+
+  if [ ! -s "$key_file" ]; then
+    printf >&2 'decoded deploy key secret data is empty: namespace=%s secret=%s key=%s\n' "$secret_namespace" "$secret_name" "$key_name"
+    exit 1
+  fi
+}
+
+mkdir -p "$run_dir"
+chown root:thatch "$run_dir"
+chmod 0710 "$run_dir"
+
+(
+  flock -n 9 || exit 0
+  key_file="$run_dir/id_ed25519"
+  known_hosts="$run_dir/known_hosts"
+  cleanup() {
+    rm -f "$key_file"
+  }
+  trap cleanup EXIT INT TERM
+
+  preflight_mirror_repo
+
+  read_deploy_key
+  touch "$known_hosts"
+  chown thatch:thatch "$key_file" "$known_hosts"
+  chmod 0400 "$key_file"
+  chmod 0600 "$known_hosts"
+
+  fetch_depth_args=
+  if [ "$(sudo -u thatch git --git-dir="$repo" rev-parse --is-shallow-repository)" = true ]; then
+    fetch_depth_args=--unshallow
+  fi
+
+  sudo -u thatch GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$known_hosts" \
+    git -c gc.auto=0 -c maintenance.auto=false --git-dir="$repo" fetch --prune $fetch_depth_args "$remote" "+refs/heads/main:refs/heads/main"
+) 9>"$lock"
