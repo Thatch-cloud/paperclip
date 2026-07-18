@@ -1,0 +1,8 @@
+[Unit]
+Description=Synchronize local GitOps mirror with GitHub main
+After=network-online.target git-daemon.service k3s.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/thatch-gitops-mirror-sync

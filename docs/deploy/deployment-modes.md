@@ -119,3 +119,11 @@ curl -sS http://127.0.0.1:3100/api/health | jq '.deployment'
 ```
 
 Lag is explicit: a merged backend fix is pending when `git -C /home/thatch/Documents/oasthaus/paperclip rev-parse origin/master` differs from `PAPERCLIP_CONTROL_PLANE_REF` in `deploy.env` or from `.deployment.controlPlaneRef` on `/api/health`.
+
+## GitOps Mirror Timer
+
+The production GitOps mirror sync is versioned under `deploy/systemd/`. Install
+that bundle on the host that serves `git://192.168.2.169:9418/Thatch.Server.git`
+to keep `/srv/git/Thatch.Server.git` aligned with GitHub `main` every minute and
+avoid host-local systemd drift. See `deploy/systemd/README.md` for the exact
+install and verification commands.
