@@ -529,7 +529,7 @@ async function fetchGitHubTree(
 ): Promise<GitHubTreeEntry[]> {
   const url = `${githubApiBase(source.hostname)}/repos/${source.owner}/${source.repo}/git/trees/${source.commit}?recursive=1`;
   try {
-    const response = await fetch(url, { headers: { accept: "application/vnd.github+json" } });
+    const response = await fetch(url, { headers: githubApiHeaders() });
     if (!response.ok) {
       errors.push(`${prefix} failed to fetch GitHub tree: HTTP ${response.status}.`);
       return [];
@@ -766,6 +766,13 @@ function githubApiBase(hostname: string) {
   return normalized === "github.com" || normalized === "www.github.com"
     ? "https://api.github.com"
     : `https://${hostname}/api/v3`;
+}
+
+function githubApiHeaders() {
+  const headers: Record<string, string> = { accept: "application/vnd.github+json" };
+  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+  if (token) headers.authorization = `Bearer ${token}`;
+  return headers;
 }
 
 function rawGitHubUrl(source: CatalogSkillSource, relativePath: string) {

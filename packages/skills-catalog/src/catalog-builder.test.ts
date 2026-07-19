@@ -14,6 +14,7 @@ describe("skills catalog manifest", () => {
   afterEach(async () => {
     await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("builds stable manifest entries from catalog skill directories", async () => {
@@ -133,6 +134,55 @@ describe("skills catalog manifest", () => {
       "scripts/run.py",
     ]);
     expect(result.manifest.skills[0]!.contentHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
+  it("authenticates GitHub tree requests when a CI token is available", async () => {
+    const packageDir = await createCatalogPackage();
+    const skillMarkdown = [
+      "---",
+      "name: Remote Research",
+      "description: Research recent discussion from a pinned upstream skill.",
+      "---",
+      "",
+      "Use this skill.",
+      "",
+    ].join("\n");
+    await writeReference(packageDir, "optional", "research", "remote-research", {
+      source: {
+        type: "github",
+        hostname: "github.com",
+        owner: "example",
+        repo: "remote-skill",
+        ref: "v1.0.0",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        path: "skills/remote-research",
+      },
+      files: ["SKILL.md"],
+    });
+    vi.stubEnv("GITHUB_TOKEN", "ci-token");
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/git/trees/")) {
+        return new Response(JSON.stringify({
+          tree: [{ path: "skills/remote-research/SKILL.md", type: "blob", size: Buffer.byteLength(skillMarkdown) }],
+        }), { status: 200 });
+      }
+      if (url.endsWith("/skills/remote-research/SKILL.md")) {
+        return new Response(skillMarkdown, { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await buildCatalogManifest({
+      packageDir,
+      generatedAt: "2026-05-26T00:00:00.000Z",
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/example/remote-skill/git/trees/0123456789abcdef0123456789abcdef01234567?recursive=1",
+      { headers: { accept: "application/vnd.github+json", authorization: "Bearer ci-token" } },
+    );
   });
 
   it("reports frontmatter, directory, uniqueness, and inventory errors together", async () => {

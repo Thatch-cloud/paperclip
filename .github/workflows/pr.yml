@@ -9,6 +9,9 @@ concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   policy:
     runs-on: ubuntu-latest
