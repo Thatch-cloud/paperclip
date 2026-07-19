@@ -27,6 +27,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import { useDateRange, PRESET_KEYS, PRESET_LABELS } from "../hooks/useDateRange";
+import { aggregateBillerUsage } from "../lib/costUsageGrouping";
 import { queryKeys } from "../lib/queryKeys";
 import { billingTypeDisplayName, cn, formatCents, formatTokens, providerDisplayName } from "../lib/utils";
 import { Button } from "@/components/ui/button";
@@ -347,15 +348,20 @@ export function Costs() {
     return map;
   }, [providerData]);
 
+  const billerRows = useMemo(() => {
+    if ((billerData?.length ?? 0) > 0) return billerData ?? [];
+    return aggregateBillerUsage(providerData ?? []);
+  }, [billerData, providerData]);
+
   const byBiller = useMemo(() => {
     const map = new Map<string, CostByBiller[]>();
-    for (const row of billerData ?? []) {
+    for (const row of billerRows) {
       const rows = map.get(row.biller) ?? [];
       rows.push(row);
       map.set(row.biller, rows);
     }
     return map;
-  }, [billerData]);
+  }, [billerRows]);
 
   const weekSpendByProvider = useMemo(() => {
     const map = new Map<string, number>();
