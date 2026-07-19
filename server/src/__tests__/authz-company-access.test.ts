@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { assertBoardOrgAccess, assertCompanyAccess, hasBoardOrgAccess } from "../routes/authz.js";
+import {
+  assertBoardOrgAccess,
+  assertCompanyAccess,
+  assertControlPlaneSurfaceAccess,
+  hasBoardOrgAccess,
+} from "../routes/authz.js";
 
-function makeReq(input: {
-  method?: string;
-  actor: Express.Request["actor"];
-}) {
+function makeReq(input: { method?: string; actor: Express.Request["actor"] }) {
   return {
     method: input.method ?? "GET",
     actor: input.actor,
@@ -21,7 +23,11 @@ describe("assertCompanyAccess", () => {
         source: "session",
         companyIds: ["company-1"],
         memberships: [
-          { companyId: "company-1", membershipRole: "viewer", status: "active" },
+          {
+            companyId: "company-1",
+            membershipRole: "viewer",
+            status: "active",
+          },
         ],
       },
     });
@@ -38,12 +44,18 @@ describe("assertCompanyAccess", () => {
         source: "session",
         companyIds: ["company-1"],
         memberships: [
-          { companyId: "company-1", membershipRole: "viewer", status: "active" },
+          {
+            companyId: "company-1",
+            membershipRole: "viewer",
+            status: "active",
+          },
         ],
       },
     });
 
-    expect(() => assertCompanyAccess(req, "company-1")).toThrow("Viewer access is read-only");
+    expect(() => assertCompanyAccess(req, "company-1")).toThrow(
+      "Viewer access is read-only",
+    );
   });
 
   it("rejects writes when membership details are present but omit the target company", () => {
@@ -58,7 +70,9 @@ describe("assertCompanyAccess", () => {
       },
     });
 
-    expect(() => assertCompanyAccess(req, "company-1")).toThrow("User does not have active company access");
+    expect(() => assertCompanyAccess(req, "company-1")).toThrow(
+      "User does not have active company access",
+    );
   });
 
   it("allows legacy board actors that only provide company ids", () => {
@@ -102,7 +116,9 @@ describe("assertCompanyAccess", () => {
       },
     });
 
-    expect(() => assertCompanyAccess(req, "company-1")).toThrow("Agent key scope is read-only");
+    expect(() => assertCompanyAccess(req, "company-1")).toThrow(
+      "Agent key scope is read-only",
+    );
   });
 
   it("preserves legacy agent keys that have no stored scope", () => {
@@ -133,7 +149,9 @@ describe("assertCompanyAccess", () => {
       },
     });
 
-    expect(() => assertCompanyAccess(req, "company-1")).toThrow("User does not have access to this company");
+    expect(() => assertCompanyAccess(req, "company-1")).toThrow(
+      "User does not have access to this company",
+    );
   });
 
   it("allows local trusted board access without explicit membership", () => {
@@ -159,7 +177,13 @@ describe("assertBoardOrgAccess", () => {
         userId: "user-1",
         source: "session",
         companyIds: ["company-1"],
-        memberships: [{ companyId: "company-1", membershipRole: "operator", status: "active" }],
+        memberships: [
+          {
+            companyId: "company-1",
+            membershipRole: "operator",
+            status: "active",
+          },
+        ],
         isInstanceAdmin: false,
       },
     });
@@ -197,6 +221,106 @@ describe("assertBoardOrgAccess", () => {
     });
 
     expect(hasBoardOrgAccess(req)).toBe(false);
-    expect(() => assertBoardOrgAccess(req)).toThrow("Company membership or instance admin access required");
+    expect(() => assertBoardOrgAccess(req)).toThrow(
+      "Company membership or instance admin access required",
+    );
+  });
+});
+
+describe("assertControlPlaneSurfaceAccess", () => {
+  it("allows customer surfaces through normal company access", () => {
+    const req = makeReq({
+      method: "GET",
+      actor: {
+        type: "board",
+        userId: "user-1",
+        source: "session",
+        companyIds: ["company-1"],
+        memberships: [
+          {
+            companyId: "company-1",
+            membershipRole: "viewer",
+            status: "active",
+          },
+        ],
+      },
+    });
+
+    expect(() =>
+      assertControlPlaneSurfaceAccess(req, {
+        surface: "customer",
+        companyId: "company-1",
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails closed when customer surfaces omit company scope", () => {
+    const req = makeReq({
+      actor: { type: "board", userId: "user-1", source: "session" },
+    });
+
+    expect(() =>
+      assertControlPlaneSurfaceAccess(req, { surface: "customer" }),
+    ).toThrow("Customer surface requires a company scope");
+  });
+
+  it("restricts admin surfaces to instance admins", () => {
+    const agentReq = makeReq({
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        source: "agent_key",
+      },
+    });
+    const adminReq = makeReq({
+      actor: {
+        type: "board",
+        userId: "admin-1",
+        isInstanceAdmin: true,
+        source: "session",
+      },
+    });
+
+    expect(() =>
+      assertControlPlaneSurfaceAccess(agentReq, { surface: "admin" }),
+    ).toThrow("Board access required");
+    expect(() =>
+      assertControlPlaneSurfaceAccess(adminReq, { surface: "admin" }),
+    ).not.toThrow();
+  });
+
+  it("requires same-company node-private agent access with node_private scope when scopes are present", () => {
+    const readOnlyReq = makeReq({
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        keyScopes: ["read"],
+        source: "agent_key",
+      },
+    });
+    const nodeReq = makeReq({
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        keyScopes: ["read", "node_private"],
+        source: "agent_key",
+      },
+    });
+
+    expect(() =>
+      assertControlPlaneSurfaceAccess(readOnlyReq, {
+        surface: "node_private",
+        companyId: "company-1",
+      }),
+    ).toThrow("Agent key scope does not allow node-private access");
+    expect(() =>
+      assertControlPlaneSurfaceAccess(nodeReq, {
+        surface: "node_private",
+        companyId: "company-1",
+      }),
+    ).not.toThrow();
   });
 });
