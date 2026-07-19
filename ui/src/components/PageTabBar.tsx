@@ -5,6 +5,8 @@ import { useSidebar } from "../context/SidebarContext";
 export interface PageTabItem {
   value: string;
   label: ReactNode;
+  ariaLabel?: string;
+  selectLabel?: string;
 }
 
 interface PageTabBarProps {
@@ -14,7 +16,12 @@ interface PageTabBarProps {
   align?: "center" | "start";
 }
 
-export function PageTabBar({ items, value, onValueChange, align = "center" }: PageTabBarProps) {
+export function PageTabBar({
+  items,
+  value,
+  onValueChange,
+  align = "center",
+}: PageTabBarProps) {
   const { isMobile } = useSidebar();
 
   if (isMobile && value !== undefined && onValueChange) {
@@ -26,7 +33,8 @@ export function PageTabBar({ items, value, onValueChange, align = "center" }: Pa
       >
         {items.map((item) => (
           <option key={item.value} value={item.value}>
-            {typeof item.label === "string" ? item.label : item.value}
+            {item.selectLabel ??
+              (typeof item.label === "string" ? item.label : item.value)}
           </option>
         ))}
       </select>
@@ -34,9 +42,17 @@ export function PageTabBar({ items, value, onValueChange, align = "center" }: Pa
   }
 
   return (
-    <TabsList variant="line" className={align === "start" ? "justify-start" : undefined}>
+    <TabsList
+      variant="line"
+      className={align === "start" ? "justify-start" : undefined}
+    >
       {items.map((item) => (
-        <TabsTrigger key={item.value} value={item.value}>
+        <TabsTrigger
+          key={item.value}
+          value={item.value}
+          aria-label={item.ariaLabel}
+          title={item.ariaLabel}
+        >
           {item.label}
         </TabsTrigger>
       ))}
