@@ -1,10 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { CostByProviderModel, CostWindowSpendRow, QuotaWindow } from "@paperclipai/shared";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QuotaBar } from "./QuotaBar";
 import { ClaudeSubscriptionPanel } from "./ClaudeSubscriptionPanel";
 import { CodexSubscriptionPanel } from "./CodexSubscriptionPanel";
+import { groupUsageByModel } from "@/lib/costUsageGrouping";
 import {
   billingTypeDisplayName,
   formatCents,
@@ -33,6 +35,7 @@ interface ProviderQuotaCardProps {
   quotaError?: string | null;
   quotaSource?: string | null;
   quotaLoading?: boolean;
+  billerLabels?: Map<string, string>;
 }
 
 export function ProviderQuotaCard({
@@ -47,7 +50,9 @@ export function ProviderQuotaCard({
   quotaError = null,
   quotaSource = null,
   quotaLoading = false,
+  billerLabels,
 }: ProviderQuotaCardProps) {
+  const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
   // single-pass aggregation over rows — memoized so the 8 derived values are not
   // recomputed on every parent render tick (providers tab polls every 30s, and each
   // card is mounted twice: once in the "all" tab grid and once in its per-provider tab).
@@ -55,12 +60,12 @@ export function ProviderQuotaCard({
     let inputTokens = 0, outputTokens = 0, costCents = 0;
     let apiRunCount = 0, subRunCount = 0, subInputTokens = 0, subOutputTokens = 0;
     for (const r of rows) {
-      inputTokens += r.inputTokens;
+      inputTokens += r.inputTokens + r.cachedInputTokens;
       outputTokens += r.outputTokens;
       costCents += r.costCents;
       apiRunCount += r.apiRunCount;
       subRunCount += r.subscriptionRunCount;
-      subInputTokens += r.subscriptionInputTokens;
+      subInputTokens += r.subscriptionInputTokens + r.subscriptionCachedInputTokens;
       subOutputTokens += r.subscriptionOutputTokens;
     }
     const totalTokens = inputTokens + outputTokens;
@@ -113,6 +118,16 @@ export function ProviderQuotaCard({
     weeklyBudgetShare > 0 ? Math.min(100, (weekSpendCents / weeklyBudgetShare) * 100) : 0;
 
   const hasBudget = budgetMonthlyCents > 0;
+  const modelRows = useMemo(() => groupUsageByModel(rows), [rows]);
+
+  function toggleModel(modelKey: string) {
+    setExpandedModels((prev) => {
+      const next = new Set(prev);
+      if (next.has(modelKey)) next.delete(modelKey);
+      else next.add(modelKey);
+      return next;
+    });
+  }
 
   // memoized so the Map and max are not reconstructed on every parent render tick
   const windowMap = useMemo(
@@ -256,25 +271,42 @@ export function ProviderQuotaCard({
         )}
 
         {/* model breakdown — always shown, with token-share bars */}
-        {rows.length > 0 && (
+        {modelRows.length > 0 && (
           <>
             <div className="border-t border-border" />
             <div className="space-y-3">
-              {rows.map((row) => {
-                const rowTokens = row.inputTokens + row.outputTokens;
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Model breakdown
+              </p>
+              {modelRows.map((row) => {
+                const rowTokens = row.inputTokens + row.cachedInputTokens + row.outputTokens;
                 const tokenPct = totalTokens > 0 ? (rowTokens / totalTokens) * 100 : 0;
                 const costPct = totalCostCents > 0 ? (row.costCents / totalCostCents) * 100 : 0;
+                const modelKey = `${row.provider}:${row.model}`;
+                const isExpanded = expandedModels.has(modelKey);
                 return (
-                  <div key={`${row.provider}:${row.model}`} className="space-y-1.5">
+                  <div key={modelKey} className="space-y-1.5">
                     {/* model name and cost */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <span className="text-xs text-muted-foreground truncate font-mono block">
-                          {row.model}
-                        </span>
-                        <span className="text-[11px] text-muted-foreground truncate block">
-                          {providerDisplayName(row.biller)} · {billingTypeDisplayName(row.billingType)}
-                        </span>
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                      aria-expanded={isExpanded}
+                      onClick={() => toggleModel(modelKey)}
+                    >
+                      <div className="flex min-w-0 items-start gap-1.5">
+                        {isExpanded ? (
+                          <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+                        )}
+                        <div className="min-w-0">
+                          <span className="text-xs text-muted-foreground truncate font-mono block">
+                            {row.model}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground truncate block">
+                            {row.breakdown.length} billing breakdown{row.breakdown.length === 1 ? "" : "s"}
+                          </span>
+                        </div>
                       </div>
                       <div className="flex items-center gap-3 shrink-0 tabular-nums text-xs">
                         <span className="text-muted-foreground">
@@ -282,7 +314,7 @@ export function ProviderQuotaCard({
                         </span>
                         <span className="font-medium">{formatCents(row.costCents)}</span>
                       </div>
-                    </div>
+                    </button>
                     {/* token share bar */}
                     <div className="relative h-2 w-full border border-border overflow-hidden">
                       <div
@@ -297,6 +329,23 @@ export function ProviderQuotaCard({
                         title={`${Math.round(costPct)}% of provider cost`}
                       />
                     </div>
+                    {isExpanded ? (
+                      <div className="space-y-1 border-l border-border pl-3">
+                        {row.breakdown.map((detail) => (
+                          <div
+                            key={`${detail.provider}:${detail.model}:${detail.biller}:${detail.billingType}`}
+                            className="flex items-center justify-between gap-2 text-[11px]"
+                          >
+                            <span className="min-w-0 truncate text-muted-foreground">
+                              {billerLabels?.get(detail.biller) ?? providerDisplayName(detail.biller)} · {billingTypeDisplayName(detail.billingType)}
+                            </span>
+                            <span className="shrink-0 tabular-nums text-muted-foreground">
+                              {formatTokens(detail.inputTokens + detail.cachedInputTokens + detail.outputTokens)} tok · {formatCents(detail.costCents)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}

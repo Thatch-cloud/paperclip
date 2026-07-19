@@ -2,10 +2,12 @@ import { useMemo } from "react";
 import type { CostByBiller, CostByProviderModel } from "@paperclipai/shared";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { QuotaBar } from "./QuotaBar";
+import { groupUsageByModel } from "@/lib/costUsageGrouping";
 import { billingTypeDisplayName, formatCents, formatTokens, providerDisplayName } from "@/lib/utils";
 
 interface BillerSpendCardProps {
   row: CostByBiller;
+  displayLabel: string;
   weekSpendCents: number;
   budgetMonthlyCents: number;
   totalCompanySpendCents: number;
@@ -14,6 +16,7 @@ interface BillerSpendCardProps {
 
 export function BillerSpendCard({
   row,
+  displayLabel,
   weekSpendCents,
   budgetMonthlyCents,
   totalCompanySpendCents,
@@ -44,6 +47,8 @@ export function BillerSpendCard({
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   }, [providerRows]);
 
+  const modelBreakdown = useMemo(() => groupUsageByModel(providerRows), [providerRows]);
+
   const providerBudgetShare =
     budgetMonthlyCents > 0 && totalCompanySpendCents > 0
       ? (row.costCents / totalCompanySpendCents) * budgetMonthlyCents
@@ -59,7 +64,7 @@ export function BillerSpendCard({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <CardTitle className="text-sm font-semibold">
-              {providerDisplayName(row.biller)}
+              {displayLabel}
             </CardTitle>
             <CardDescription className="text-xs mt-0.5">
               <span className="font-mono">{formatTokens(row.inputTokens + row.cachedInputTokens)}</span> in
@@ -131,6 +136,36 @@ export function BillerSpendCard({
                       <div className="font-medium">{formatCents(entry.costCents)}</div>
                       <div className="text-muted-foreground">
                         {formatTokens(entry.inputTokens + entry.outputTokens)} tok
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {modelBreakdown.length > 0 && (
+          <>
+            <div className="border-t border-border" />
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Model usage
+              </p>
+              <div className="space-y-1.5">
+                {modelBreakdown.map((entry) => (
+                  <div key={`${entry.provider}:${entry.model}`} className="flex items-center justify-between gap-2 text-xs">
+                    <div className="min-w-0">
+                      <div className="truncate font-mono text-muted-foreground">{entry.model}</div>
+                      <div className="truncate text-[11px] text-muted-foreground">
+                        {providerDisplayName(entry.provider)} · {entry.breakdown.length} billing breakdown{entry.breakdown.length === 1 ? "" : "s"}
+                        {entry.breakdown.length > 1 ? " across accounts" : ""}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right tabular-nums">
+                      <div className="font-medium">{formatCents(entry.costCents)}</div>
+                      <div className="text-muted-foreground">
+                        {formatTokens(entry.inputTokens + entry.cachedInputTokens + entry.outputTokens)} tok
                       </div>
                     </div>
                   </div>

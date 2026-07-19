@@ -669,7 +669,7 @@ function BudgetFinanceMatrix() {
 
         <Section eyebrow="Billers" title="BillerSpendCard period comparison and upstream provider split">
           <div className="grid gap-5 xl:grid-cols-3">
-            {billerSpendRows.map((entry) => (
+            {billerSpendRows.map((entry, index) => (
               <CaseFrame
                 key={entry.row.biller}
                 title={`${entry.state[0]!.toUpperCase()}${entry.state.slice(1)} allocation`}
@@ -678,6 +678,7 @@ function BudgetFinanceMatrix() {
               >
                 <BillerSpendCard
                   row={entry.row}
+                  displayLabel={`Account ${index + 1}`}
                   weekSpendCents={entry.weekSpendCents}
                   budgetMonthlyCents={250_000}
                   totalCompanySpendCents={entry.totalCompanySpendCents}
