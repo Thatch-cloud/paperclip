@@ -260,7 +260,7 @@ describe("Layout", () => {
     vi.clearAllMocks();
   });
 
-  it("does not render the deployment explainer in the shared layout", async () => {
+  it("does not render deployment or stale API health warnings in the shared layout", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -284,6 +284,9 @@ describe("Layout", () => {
     expect(container.textContent).not.toContain(
       "Sign-in is required and this instance is intended for private-network access.",
     );
+    expect(container.textContent).not.toContain("API degraded");
+    expect(container.textContent).not.toContain("API offline");
+    expect(container.textContent).not.toContain("Checking status");
 
     await act(async () => {
       root.unmount();
