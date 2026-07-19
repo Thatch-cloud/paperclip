@@ -594,6 +594,13 @@ export function Costs() {
 
   const providers = useMemo(() => Array.from(byProvider.keys()), [byProvider]);
   const billers = useMemo(() => Array.from(byBiller.keys()), [byBiller]);
+  const billerLabels = useMemo(() => {
+    const map = new Map<string, string>();
+    billers.forEach((biller, index) => {
+      map.set(biller, `Account ${index + 1}`);
+    });
+    return map;
+  }, [billers]);
 
   const effectiveProvider =
     activeProvider === "all" || providers.includes(activeProvider)
@@ -704,8 +711,8 @@ export function Costs() {
           </span>
         ),
       },
-      ...billerKeys.map((biller, index) => {
-        const label = `Account ${index + 1}`;
+      ...billerKeys.map((biller) => {
+        const label = billerLabels.get(biller) ?? "Account";
         return {
           value: biller,
           label: (
@@ -716,7 +723,7 @@ export function Costs() {
         };
       }),
     ];
-  }, [byBiller]);
+  }, [byBiller, billerLabels]);
 
   const inferenceTokenTotal = (spendData?.byAgent ?? []).reduce(
     (sum, row) =>
@@ -1334,6 +1341,7 @@ export function Costs() {
                             quotaSourcesByProvider.get(provider) ?? null
                           }
                           quotaLoading={quotaLoading}
+                          billerLabels={billerLabels}
                         />
                       ))}
                     </div>
@@ -1358,6 +1366,7 @@ export function Costs() {
                       quotaError={quotaErrorsByProvider.get(provider) ?? null}
                       quotaSource={quotaSourcesByProvider.get(provider) ?? null}
                       quotaLoading={quotaLoading}
+                      billerLabels={billerLabels}
                     />
                   </TabsContent>
                 ))}
@@ -1393,6 +1402,7 @@ export function Costs() {
                           <BillerSpendCard
                             key={biller}
                             row={row}
+                            displayLabel={billerLabels.get(biller) ?? "Account"}
                             weekSpendCents={weekSpendByBiller.get(biller) ?? 0}
                             budgetMonthlyCents={
                               spendData?.summary.budgetCents ?? 0
@@ -1418,6 +1428,7 @@ export function Costs() {
                     <TabsContent key={biller} value={biller} className="mt-4">
                       <BillerSpendCard
                         row={row}
+                        displayLabel={billerLabels.get(biller) ?? "Account"}
                         weekSpendCents={weekSpendByBiller.get(biller) ?? 0}
                         budgetMonthlyCents={spendData?.summary.budgetCents ?? 0}
                         totalCompanySpendCents={

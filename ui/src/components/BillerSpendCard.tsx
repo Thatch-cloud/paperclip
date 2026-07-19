@@ -7,6 +7,7 @@ import { billingTypeDisplayName, formatCents, formatTokens, providerDisplayName 
 
 interface BillerSpendCardProps {
   row: CostByBiller;
+  displayLabel: string;
   weekSpendCents: number;
   budgetMonthlyCents: number;
   totalCompanySpendCents: number;
@@ -15,6 +16,7 @@ interface BillerSpendCardProps {
 
 export function BillerSpendCard({
   row,
+  displayLabel,
   weekSpendCents,
   budgetMonthlyCents,
   totalCompanySpendCents,
@@ -62,7 +64,7 @@ export function BillerSpendCard({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <CardTitle className="text-sm font-semibold">
-              {providerDisplayName(row.biller)}
+              {displayLabel}
             </CardTitle>
             <CardDescription className="text-xs mt-0.5">
               <span className="font-mono">{formatTokens(row.inputTokens + row.cachedInputTokens)}</span> in
@@ -157,6 +159,7 @@ export function BillerSpendCard({
                       <div className="truncate font-mono text-muted-foreground">{entry.model}</div>
                       <div className="truncate text-[11px] text-muted-foreground">
                         {providerDisplayName(entry.provider)} · {entry.breakdown.length} billing breakdown{entry.breakdown.length === 1 ? "" : "s"}
+                        {entry.breakdown.length > 1 ? " across accounts" : ""}
                       </div>
                     </div>
                     <div className="shrink-0 text-right tabular-nums">

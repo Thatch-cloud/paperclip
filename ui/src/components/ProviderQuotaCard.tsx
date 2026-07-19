@@ -35,6 +35,7 @@ interface ProviderQuotaCardProps {
   quotaError?: string | null;
   quotaSource?: string | null;
   quotaLoading?: boolean;
+  billerLabels?: Map<string, string>;
 }
 
 export function ProviderQuotaCard({
@@ -49,6 +50,7 @@ export function ProviderQuotaCard({
   quotaError = null,
   quotaSource = null,
   quotaLoading = false,
+  billerLabels,
 }: ProviderQuotaCardProps) {
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
   // single-pass aggregation over rows — memoized so the 8 derived values are not
@@ -273,6 +275,9 @@ export function ProviderQuotaCard({
           <>
             <div className="border-t border-border" />
             <div className="space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Model breakdown
+              </p>
               {modelRows.map((row) => {
                 const rowTokens = row.inputTokens + row.cachedInputTokens + row.outputTokens;
                 const tokenPct = totalTokens > 0 ? (rowTokens / totalTokens) * 100 : 0;
@@ -332,7 +337,7 @@ export function ProviderQuotaCard({
                             className="flex items-center justify-between gap-2 text-[11px]"
                           >
                             <span className="min-w-0 truncate text-muted-foreground">
-                              {providerDisplayName(detail.biller)} · {billingTypeDisplayName(detail.billingType)}
+                              {billerLabels?.get(detail.biller) ?? providerDisplayName(detail.biller)} · {billingTypeDisplayName(detail.billingType)}
                             </span>
                             <span className="shrink-0 tabular-nums text-muted-foreground">
                               {formatTokens(detail.inputTokens + detail.cachedInputTokens + detail.outputTokens)} tok · {formatCents(detail.costCents)}
