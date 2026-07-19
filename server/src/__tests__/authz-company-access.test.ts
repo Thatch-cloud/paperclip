@@ -290,13 +290,39 @@ describe("assertControlPlaneSurfaceAccess", () => {
     ).not.toThrow();
   });
 
-  it("requires same-company node-private agent access with node_private scope when scopes are present", () => {
+  it("requires same-company node-private agent access with explicit node_private scope", () => {
+    const unscopedReq = makeReq({
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        source: "agent_key",
+      },
+    });
+    const nullScopedReq = makeReq({
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-1",
+        keyScopes: null,
+        source: "agent_key",
+      },
+    });
     const readOnlyReq = makeReq({
       actor: {
         type: "agent",
         agentId: "agent-1",
         companyId: "company-1",
         keyScopes: ["read"],
+        source: "agent_key",
+      },
+    });
+    const wrongCompanyReq = makeReq({
+      actor: {
+        type: "agent",
+        agentId: "agent-1",
+        companyId: "company-2",
+        keyScopes: ["node_private"],
         source: "agent_key",
       },
     });
@@ -311,11 +337,29 @@ describe("assertControlPlaneSurfaceAccess", () => {
     });
 
     expect(() =>
+      assertControlPlaneSurfaceAccess(unscopedReq, {
+        surface: "node_private",
+        companyId: "company-1",
+      }),
+    ).toThrow("Agent key scope does not allow node-private access");
+    expect(() =>
+      assertControlPlaneSurfaceAccess(nullScopedReq, {
+        surface: "node_private",
+        companyId: "company-1",
+      }),
+    ).toThrow("Agent key scope does not allow node-private access");
+    expect(() =>
       assertControlPlaneSurfaceAccess(readOnlyReq, {
         surface: "node_private",
         companyId: "company-1",
       }),
     ).toThrow("Agent key scope does not allow node-private access");
+    expect(() =>
+      assertControlPlaneSurfaceAccess(wrongCompanyReq, {
+        surface: "node_private",
+        companyId: "company-1",
+      }),
+    ).toThrow("Node-private surface requires same-company agent access");
     expect(() =>
       assertControlPlaneSurfaceAccess(nodeReq, {
         surface: "node_private",

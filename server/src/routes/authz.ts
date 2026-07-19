@@ -78,7 +78,7 @@ export function assertControlPlaneSurfaceAccess(
       );
     }
     if (
-      Array.isArray(req.actor.keyScopes) &&
+      !Array.isArray(req.actor.keyScopes) ||
       !req.actor.keyScopes.includes("node_private")
     ) {
       throw forbidden("Agent key scope does not allow node-private access");
