@@ -151,3 +151,11 @@ export function aggregateBillerUsage(
 
   return Array.from(map.values()).sort((a, b) => b.costCents - a.costCents);
 }
+
+export function resolveBillerUsageRows(
+  billerRows: CostByBiller[] | undefined,
+  providerRows: CostByProviderModel[] | undefined,
+): CostByBiller[] {
+  if ((billerRows?.length ?? 0) > 0) return billerRows ?? [];
+  return aggregateBillerUsage(providerRows ?? []);
+}

@@ -45,7 +45,7 @@ import {
   PRESET_KEYS,
   PRESET_LABELS,
 } from "../hooks/useDateRange";
-import { aggregateBillerUsage } from "../lib/costUsageGrouping";
+import { resolveBillerUsageRows } from "../lib/costUsageGrouping";
 import { queryKeys } from "../lib/queryKeys";
 import {
   billingTypeDisplayName,
@@ -490,9 +490,12 @@ export function Costs() {
   }, [providerData]);
 
   const billerRows = useMemo(() => {
-    if ((billerData?.length ?? 0) > 0) return billerData ?? [];
-    return aggregateBillerUsage(providerData ?? []);
+    return resolveBillerUsageRows(billerData, providerData);
   }, [billerData, providerData]);
+
+  const weekBillerRows = useMemo(() => {
+    return resolveBillerUsageRows(weekBillerData, weekData);
+  }, [weekBillerData, weekData]);
 
   const byBiller = useMemo(() => {
     const map = new Map<string, CostByBiller[]>();
@@ -514,11 +517,11 @@ export function Costs() {
 
   const weekSpendByBiller = useMemo(() => {
     const map = new Map<string, number>();
-    for (const row of weekBillerData ?? []) {
+    for (const row of weekBillerRows) {
       map.set(row.biller, (map.get(row.biller) ?? 0) + row.costCents);
     }
     return map;
-  }, [weekBillerData]);
+  }, [weekBillerRows]);
 
   const windowSpendByProvider = useMemo(() => {
     const map = new Map<string, CostWindowSpendRow[]>();
