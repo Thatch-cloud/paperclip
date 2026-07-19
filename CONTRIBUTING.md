@@ -95,6 +95,27 @@ Use this block exactly, preserving the markers:
 
 If a new commit is pushed, the reviewer must re-review and update `Head-sha`; stale bot approvals are dismissed automatically.
 
+The review decision is intentionally strict so ambiguous reviews fail closed. The decision must appear on its own verdict line as `Decision: approved`. The gate parses the value after the first colon through the end of that same line, trims surrounding whitespace, lowercases the value, and then requires it to equal `approved`. Anything else on the decision line fails closed.
+
+Passing verdict lines:
+
+```md
+Decision: approved
+- Decision: approved
+Decision: approved
+
+Additional review prose can follow on later lines.
+```
+
+Failing verdict lines:
+
+```md
+**Decision**: approved
+**Decision: approved**
+Decision: approved after fixes
+Decision: approved - no issues found
+```
+
 ### Greptile Review
 
 We use [Greptile](https://greptile.com) for automated code review. Your PR must achieve a **5/5 Greptile score** before it can be merged, with:

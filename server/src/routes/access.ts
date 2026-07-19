@@ -2419,12 +2419,14 @@ export function accessRoutes(
     bindHost: string;
     allowedHostnames: string[];
     inviteResolutionNetwork?: Partial<InviteResolutionNetwork>;
+    keyManagementDb?: Db;
   }
 ) {
   const router = Router();
   const access = accessService(db);
   const boardAuth = boardAuthService(db);
   const agents = agentService(db);
+  const keyManagementAgents = opts.keyManagementDb ? agentService(opts.keyManagementDb) : agents;
   const routeInviteResolutionNetwork = opts.inviteResolutionNetwork
     ? { ...defaultInviteResolutionNetwork, ...opts.inviteResolutionNetwork }
     : inviteResolutionNetwork;
@@ -4171,7 +4173,7 @@ export function accessRoutes(
         .then((rows) => rows[0] ?? null);
       if (!consumed) throw conflict("Claim secret already used");
 
-      const created = await agents.createApiKey(
+      const created = await keyManagementAgents.createApiKey(
         joinRequest.createdAgentId,
         {
           name: "initial-join-key",

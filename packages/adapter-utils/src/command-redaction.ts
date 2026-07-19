@@ -16,6 +16,7 @@ const COMMAND_OPENAI_KEY_RE = /\bsk-[A-Za-z0-9_-]{12,}\b/g;
 const COMMAND_GITHUB_TOKEN_RE = /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g;
 const COMMAND_JWT_RE =
   /\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,})?\b/g;
+const COMMAND_URL_CREDENTIALS_RE = /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^\s/@:]+):([^\s/@]+)@/g;
 const COMMAND_SECRET_HINTS = [
   "api",
   "key",
@@ -29,6 +30,7 @@ const COMMAND_SECRET_HINTS = [
   "private",
   "cookie",
   "connectionstring",
+  "://",
   "sk-",
   "ghp_",
   "gho_",
@@ -54,5 +56,6 @@ export function redactCommandText(command: string, redactedValue = REDACTED_COMM
     )
     .replace(COMMAND_OPENAI_KEY_RE, redactedValue)
     .replace(COMMAND_GITHUB_TOKEN_RE, redactedValue)
-    .replace(COMMAND_JWT_RE, redactedValue);
+    .replace(COMMAND_JWT_RE, redactedValue)
+    .replace(COMMAND_URL_CREDENTIALS_RE, `$1${redactedValue}@`);
 }

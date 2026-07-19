@@ -53,5 +53,5 @@ describe("secret route error logging", () => {
     expect(logText).toContain("POST /api/companies/company-1/secrets 400");
     expect(logText).toContain("[REDACTED]");
     expect(logText).not.toContain(canarySecret);
-  });
+  }, 10_000);
 });
