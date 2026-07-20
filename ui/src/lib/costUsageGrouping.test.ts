@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { CostByProviderModel } from "@paperclipai/shared";
-import { aggregateBillerUsage, groupUsageByModel } from "./costUsageGrouping";
+import type { CostByBiller, CostByProviderModel } from "@paperclipai/shared";
+import {
+  aggregateBillerUsage,
+  groupUsageByModel,
+  resolveBillerUsageRows,
+} from "./costUsageGrouping";
 
 const baseRow: CostByProviderModel = {
   provider: "anthropic",
@@ -112,5 +116,48 @@ describe("cost usage grouping", () => {
       modelCount: 1,
       subscriptionRunCount: 1,
     });
+  });
+
+  it("resolves weekly biller rows from weekly provider usage when biller rows are absent", () => {
+    const currentProviderRows: CostByProviderModel[] = [
+      { ...baseRow, biller: "anthropic", costCents: 1200 },
+    ];
+    const weeklyProviderRows: CostByProviderModel[] = [
+      { ...baseRow, biller: "anthropic", costCents: 250 },
+      { ...baseRow, biller: "openai", provider: "openai", costCents: 75 },
+    ];
+
+    const rows = resolveBillerUsageRows(undefined, weeklyProviderRows);
+
+    expect(rows.map((row) => [row.biller, row.costCents])).toEqual([
+      ["anthropic", 250],
+      ["openai", 75],
+    ]);
+    expect(resolveBillerUsageRows(undefined, currentProviderRows)[0].costCents).toBe(
+      1200,
+    );
+  });
+
+  it("keeps explicit biller rows ahead of provider-derived fallback rows", () => {
+    const explicitRows: CostByBiller[] = [
+      {
+        biller: "anthropic",
+        costCents: 500,
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        apiRunCount: 0,
+        subscriptionRunCount: 0,
+        subscriptionCachedInputTokens: 0,
+        subscriptionInputTokens: 0,
+        subscriptionOutputTokens: 0,
+        providerCount: 1,
+        modelCount: 1,
+      },
+    ];
+
+    expect(resolveBillerUsageRows(explicitRows, [{ ...baseRow, costCents: 1 }])).toBe(
+      explicitRows,
+    );
   });
 });
