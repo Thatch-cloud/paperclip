@@ -79,6 +79,27 @@ All Paperclip CI gates (lint, typecheck, tests, build, and any other required ch
 
 Paperclip-authored PRs require a non-author Paperclip review before merge. After reviewing the current head commit, the reviewer adds a `paperclip-review` attestation block to the PR body. The `review-gate` workflow validates the block, checks both agent keys against [`.github/paperclip-agents.txt`](.github/paperclip-agents.txt), verifies the reviewer differs from the author, verifies `Head-sha` matches the current PR head, and records a `github-actions[bot]` approval for branch protection.
 
+#### Reconcile findings before attesting
+
+Concurrent reviewer runs can each see a different snapshot of the review issue. Before writing the attestation, the reviewer MUST re-read the review issue's own comment thread and reconcile any `FAIL` or blocker comment that is newer than the previous attestation:
+
+- If the author fixed the finding, name it in the attestation and say it was **fixed by author**.
+- If the reviewer withdrew the finding, name it and say it was **withdrawn**.
+- If no unresolved findings remain, `Open-findings-reconciled: none` may be used.
+
+`Open-findings-reconciled: none` is only permissible when the reconciliation check was actually run and came back empty. It must not mean "someone else handled it".
+
+#### Cite evidence at the attested head
+
+Every attestation must include a concrete evidence line:
+
+- For CI conclusions, state the check(s) and result at the exact `Head-sha` (e.g., "CI all green at `d4691383`").
+- For local runs, label the command and name any skipped suites (e.g., "Local `cargo test -p thatch-store-postgres` — 59/60 passed; Postgres suite skipped because `THATCH_TEST_POSTGRES_URL` was not set").
+
+A local PASS is not evidence for a suite that was skipped.
+
+#### Attestation block
+
 Use this block exactly, preserving the markers:
 
 ```md
@@ -89,6 +110,8 @@ Use this block exactly, preserving the markers:
 - Decision: approved
 - Head-sha: full-or-7-plus-character-sha
 - Open-findings-reconciled: none
+- Reconciliation: re-read the issue thread; no unresolved FAIL/blocker comments since the previous attestation
+- Evidence: CI all green at Head-sha (or local run: skipped suites named)
 - Paperclip-review: /THA/issues/THA-0000#comment-comment-id
 <!-- paperclip-review:end -->
 ```

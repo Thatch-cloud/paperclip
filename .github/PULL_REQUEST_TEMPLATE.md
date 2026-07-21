@@ -64,7 +64,16 @@
   Keep the markers. The review-gate workflow validates this block, checks that
   Reviewer-agent differs from Author-agent, checks both agents against
   .github/paperclip-agents.txt on the base branch, checks Head-sha against the
-  current PR head, then records github-actions[bot] approval.
+  current PR head, and records github-actions[bot] approval.
+
+  Before attesting, the reviewer MUST re-read the review issue's own comment
+  thread and reconcile any FAIL / blocker comment newer than the previous
+  attestation. "Open-findings-reconciled: none" is only valid when that check
+  came back empty. If the author fixed a finding, name it and say "fixed by
+  author" — "none" must mean none existed, not "someone else handled it".
+
+  Evidence must be the CI conclusion at the attested head sha, or an explicit
+  local-run note that names any skipped suites.
 -->
 
 <!-- paperclip-review:start -->
@@ -75,6 +84,8 @@
 - Decision: approved
 - Head-sha: full-or-7-plus-character-sha
 - Open-findings-reconciled: none
+- Reconciliation: re-read the issue thread; no unresolved FAIL/blocker comments since the previous attestation
+- Evidence: CI all green at Head-sha (or local run: skipped suites named)
 - Paperclip-review: /THA/issues/THA-0000#comment-comment-id
 -->
 <!-- paperclip-review:end -->

@@ -16,13 +16,16 @@ name: review-gate
 #   - Decision: approved
 #   - Head-sha: <full 40-char sha of the commit reviewed>
 #   - Open-findings-reconciled: none
+#   - Reconciliation: re-read the issue thread; no unresolved FAIL/blocker comments since the previous attestation
+#   - Evidence: CI all green at Head-sha (or local run: skipped suites named)
 #   - Paperclip-review: /THA/issues/THA-1807#comment-1234
 #   <!-- paperclip-review:end -->
 #
 # Gate passes only when the block is present and well-formed, Decision is
 # `approved`, Author-agent and Reviewer-agent are in .github/paperclip-agents.txt,
 # Reviewer-agent differs from Author-agent, Head-sha matches the current PR head,
-# and Open-findings-reconciled does not admit unresolved high-severity findings.
+# Open-findings-reconciled does not admit unresolved high-severity findings, and
+# both Reconciliation and Evidence are present and non-empty.
 # The roster is read from the base branch, not the PR head, so a PR cannot modify
 # the roster to make its own attestation pass.
 
@@ -134,6 +137,8 @@ jobs:
             const attestSha = field('Head-sha');
             const pcReview = field('Paperclip-review');
             const reconciled = field('Open-findings-reconciled').toLowerCase();
+            const reconciliation = field('Reconciliation');
+            const evidence = field('Evidence');
 
             const problems = [];
             if (!author) problems.push('Author-agent is missing');
@@ -161,6 +166,16 @@ jobs:
             } else if (/(^|[;\n])\s*(open|unresolved)\b/i.test(reconciled)) {
               problems.push('Open-findings-reconciled must not list open or unresolved high-severity findings');
             }
+            if (!reconciliation) {
+              problems.push('Reconciliation is missing');
+            } else if (/\b(not\s+checked|n\/a)\b/i.test(reconciliation)) {
+              problems.push('Reconciliation must state how the issue thread was checked and what was found');
+            }
+            if (!evidence) {
+              problems.push('Evidence is missing');
+            } else if (/\b(local|ci)\b/i.test(evidence) === false) {
+              problems.push('Evidence must state whether it is a CI conclusion or a local run, and must name any skipped suites');
+            }
 
             if (problems.length > 0) {
               await dismissBotApprovals('Paperclip review attestation invalid or stale.');
@@ -185,6 +200,8 @@ jobs:
                 `- Reviewer agent: ${reviewer}\n` +
                 `- Reviewed commit: ${attestSha}\n` +
                 `- Open findings reconciled: ${reconciled}\n` +
+                `- Reconciliation: ${reconciliation}\n` +
+                `- Evidence: ${evidence}\n` +
                 `- Paperclip review: ${pcReview}\n\n` +
                 'This approval is the GitHub record of a review performed and attributed at the Paperclip layer. ' +
                 'It is dismissed automatically if the attestation is removed or the PR head changes.',
