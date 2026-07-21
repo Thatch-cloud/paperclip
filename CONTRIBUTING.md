@@ -89,9 +89,17 @@ Use this block exactly, preserving the markers:
 - Decision: approved
 - Head-sha: full-or-7-plus-character-sha
 - Open-findings-reconciled: none
+- Reconciliation: Re-read the review issue thread; no FAIL/blocker comments newer than the previous attestation remain unresolved.
+- Evidence: CI conclusion at the attested head (link or check name), or local run with skipped suites named
 - Paperclip-review: /THA/issues/THA-0000#comment-comment-id
 <!-- paperclip-review:end -->
 ```
+
+Before adding the attestation, the reviewer must re-read the linked review issue's comment thread and reconcile any `FAIL` or blocker comments newer than the previous attestation:
+
+- Use `Open-findings-reconciled: none` only when that thread check has been run and came back empty.
+- If a prior finding was fixed by the author rather than withdrawn, name it in the attestation and say "fixed by author".
+- Cite the CI conclusion at the attested `Head-sha`, or explicitly label a local run and name any skipped suites.
 
 If a new commit is pushed, the reviewer must re-review and update `Head-sha`; stale bot approvals are dismissed automatically.
 

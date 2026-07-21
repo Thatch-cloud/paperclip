@@ -75,6 +75,8 @@
 - Decision: approved
 - Head-sha: full-or-7-plus-character-sha
 - Open-findings-reconciled: none
+- Reconciliation: Re-read the review issue thread; no FAIL/blocker comments newer than the previous attestation remain unresolved.
+- Evidence: CI conclusion at the attested head (link or check name), or local run with skipped suites named
 - Paperclip-review: /THA/issues/THA-0000#comment-comment-id
 -->
 <!-- paperclip-review:end -->

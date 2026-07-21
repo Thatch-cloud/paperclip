@@ -16,6 +16,8 @@ name: review-gate
 #   - Decision: approved
 #   - Head-sha: <full 40-char sha of the commit reviewed>
 #   - Open-findings-reconciled: none
+#   - Reconciliation: Re-read the review issue thread; no FAIL/blocker comments newer than the previous attestation remain unresolved.
+#   - Evidence: CI conclusion at the attested head (link or check name), or local run with skipped suites named
 #   - Paperclip-review: /THA/issues/THA-1807#comment-1234
 #   <!-- paperclip-review:end -->
 #
