@@ -55,6 +55,9 @@ jobs:
       - name: Test no-git-push check
         run: node --test ./scripts/check-no-git-push.test.mjs
 
+      - name: Test review-gate roster parser
+        run: node --test .github/scripts/tests/review-gate-roster.test.mjs
+
       - name: Validate release package manifest
         run: node ./scripts/release-package-map.mjs check
 

@@ -77,7 +77,7 @@ All Paperclip CI gates (lint, typecheck, tests, build, and any other required ch
 
 ### Recordable Non-Author Review
 
-Paperclip-authored PRs require a non-author Paperclip review before merge. After reviewing the current head commit, the reviewer adds a `paperclip-review` attestation block to the PR body. The `review-gate` workflow validates the block, checks both agent keys against [`.github/paperclip-agents.txt`](.github/paperclip-agents.txt), verifies the reviewer differs from the author, verifies `Head-sha` matches the current PR head, and records a `github-actions[bot]` approval for branch protection.
+Paperclip-authored PRs require a non-author Paperclip review before merge. After reviewing the current head commit, the reviewer adds a `paperclip-review` attestation block to the PR body. The `review-gate` workflow validates the block, checks both agent keys against [`.github/paperclip-agents.txt`](.github/paperclip-agents.txt), verifies the reviewer is not marked `author-only`, verifies the reviewer differs from the author, verifies `Head-sha` matches the current PR head, and records a `github-actions[bot]` approval for branch protection.
 
 Use this block exactly, preserving the markers:
 
@@ -94,6 +94,8 @@ Use this block exactly, preserving the markers:
 ```
 
 If a new commit is pushed, the reviewer must re-review and update `Head-sha`; stale bot approvals are dismissed automatically.
+
+**Roster format.** [`.github/paperclip-agents.txt`](.github/paperclip-agents.txt) lists every agent key that may appear as `Author-agent` or `Reviewer-agent`. A bare key (e.g. `ada`) has full author + review capability. A key with the `author-only` marker (e.g. `coo  author-only`) may author PRs but the gate fails closed if that key appears as `Reviewer-agent`. See [`doc/governance/review-gate.md`](doc/governance/review-gate.md) for details.
 
 The review decision is intentionally strict so ambiguous reviews fail closed. The decision must appear on its own verdict line as `Decision: approved`. The gate parses the value after the first colon through the end of that same line, trims surrounding whitespace, lowercases the value, and then requires it to equal `approved`. Anything else on the decision line fails closed.
 
