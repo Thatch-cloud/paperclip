@@ -749,6 +749,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     retryReason?: "assignment_recovery" | "issue_continuation_needed" | null;
     cause?: string;
     kind?: string;
+    expectedStatus?: "blocked" | "todo";
   }) {
     const action = await waitForValue(async () =>
       db.select().from(issueRecoveryActions).where(
@@ -844,7 +845,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .from(issues)
       .where(eq(issues.id, input.issueId))
       .then((rows) => rows[0] ?? null);
-    expect(sourceIssue?.status).toBe("blocked");
+    expect(sourceIssue?.status).toBe(input.expectedStatus ?? "blocked");
 
     return action;
   }
@@ -1783,6 +1784,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       retryReason: null,
       cause: SUCCESSFUL_RUN_MISSING_STATE_REASON,
       kind: "missing_disposition",
+      expectedStatus: "todo",
     });
     expect(recoveryAction.evidence).toMatchObject({
       sourceRunId,
@@ -1794,7 +1796,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(JSON.stringify(recoveryAction.evidence)).not.toContain("sk-test-successful-handoff-secret");
 
     const sourceIssue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
-    expect(sourceIssue?.status).toBe("blocked");
+    expect(sourceIssue?.status).toBe("todo");
     await expect(sourceBlockerIssueIds(companyId, issueId)).resolves.toEqual([]);
 
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
@@ -1871,6 +1873,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       retryReason: null,
       cause: SUCCESSFUL_RUN_MISSING_STATE_REASON,
       kind: "missing_disposition",
+      expectedStatus: "todo",
     });
     expect(recoveryAction.evidence).toMatchObject({
       sourceRunId,
