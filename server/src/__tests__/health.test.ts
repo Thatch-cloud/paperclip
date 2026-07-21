@@ -108,6 +108,40 @@ describe("GET /health", () => {
     });
   });
 
+  it("returns 503 when the database probe times out", async () => {
+    const previousTimeout = process.env.HEALTH_DB_QUERY_TIMEOUT_MS;
+    process.env.HEALTH_DB_QUERY_TIMEOUT_MS = "25";
+    try {
+      const db = {
+        execute: vi.fn().mockImplementation(
+          () => new Promise(() => {
+            // Intentionally never resolves to force a timeout path.
+          }),
+        ),
+      } as unknown as Db;
+      const app = createApp(db);
+      const startedAt = Date.now();
+
+      const res = await request(app).get("/health");
+
+      const elapsedMs = Date.now() - startedAt;
+      expect(elapsedMs).toBeGreaterThanOrEqual(100);
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({
+        status: "unhealthy",
+        version: serverVersion,
+        deployment: deploymentVersion,
+        error: "database_unreachable",
+      });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.HEALTH_DB_QUERY_TIMEOUT_MS;
+      } else {
+        process.env.HEALTH_DB_QUERY_TIMEOUT_MS = previousTimeout;
+      }
+    }
+  });
+
   it("redacts deployment metadata for anonymous authenticated requests when the database probe fails", async () => {
     const originalRef = process.env.PAPERCLIP_CONTROL_PLANE_REF;
     const originalReleaseDir = process.env.PAPERCLIP_CONTROL_PLANE_RELEASE_DIR;

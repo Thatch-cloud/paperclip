@@ -32,6 +32,29 @@ function hasDevServerStatusToken(providedToken: string | undefined) {
   return timingSafeEqual(expected, provided);
 }
 
+function parseHealthDbProbeTimeoutMs() {
+  const timeoutFromEnv = Number(process.env.HEALTH_DB_QUERY_TIMEOUT_MS);
+  if (!Number.isFinite(timeoutFromEnv) || timeoutFromEnv <= 0) {
+    return 1000;
+  }
+
+  return Math.max(100, timeoutFromEnv);
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  return Promise.race([
+    promise.finally(() => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }),
+    new Promise<T>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("database_probe_timeout")), timeoutMs);
+    }),
+  ]);
+}
+
 export function healthRoutes(
   db?: Db,
   opts: {
@@ -106,7 +129,8 @@ export function healthRoutes(
     }
 
     try {
-      await db.execute(sql`SELECT 1`);
+      const dbProbeTimeoutMs = parseHealthDbProbeTimeoutMs();
+      await withTimeout(db.execute(sql`SELECT 1`), dbProbeTimeoutMs);
     } catch (error) {
       logger.warn({ err: error }, "Health check database probe failed");
       if (!exposeFullDetails) {

@@ -1088,4 +1088,31 @@ describeEmbeddedPostgres("low-trust red-team HTTP route regression suite", () =>
       .where(eq(issueWorkProducts.externalId, rawProduct!.id));
     expect(productsForSource).toHaveLength(1);
   });
+
+  it("denies low-trust promotion as a control-plane operation", async () => {
+    const fixture = await seedLowTrustFixture(db);
+    const lowTrustApp = createApp(db, agentActor(fixture));
+
+    const comment = await request(lowTrustApp)
+      .post(`/api/issues/${fixture.issues.assignedReview.id}/comments`)
+      .send({ body: `promote this later ${fixture.canaries.raw}` });
+    expect(comment.status, JSON.stringify(comment.body)).toBe(201);
+
+    const promotionAttempt = await request(lowTrustApp)
+      .post(`/api/issues/${fixture.issues.assignedReview.id}/low-trust/promotions`)
+      .send({
+        sourceArtifactKind: "comment",
+        sourceArtifactId: comment.body.id,
+        title: "Low-trust should not promote",
+        summary: "This should not be promotable",
+      });
+    expect(promotionAttempt.status, JSON.stringify(promotionAttempt.body)).toBe(403);
+    expect(promotionAttempt.body.error).toBe("Low-trust actors cannot use this control-plane surface");
+
+    const productsForSource = await db
+      .select({ id: issueWorkProducts.id })
+      .from(issueWorkProducts)
+      .where(eq(issueWorkProducts.externalId, comment.body.id));
+    expect(productsForSource).toHaveLength(0);
+  });
 });
