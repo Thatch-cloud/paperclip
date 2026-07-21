@@ -3,6 +3,14 @@
 # Both Author-agent and Reviewer-agent in a paperclip-review block must appear
 # here (case-insensitive) or the gate fails closed.
 #
+# Format (one entry per line):
+#
+#   bare-key                # full author + review capability (backward compatible)
+#   key  author-only        # may author PRs but must never be Reviewer-agent
+#
+# The gate fails closed with a clear message when an author-only key appears
+# as Reviewer-agent on any PR.
+#
 # Update this file when agents join or leave the fleet. The key must match the
 # agent's short name as used in attestation blocks and Paperclip issue assignments.
 #
@@ -15,3 +23,7 @@ linus
 tim
 ceo
 cto
+# coo authors Development-Lifecycle governance docs (CONTRIBUTING.md,
+# docs/governance/). Author-agent only — the COO does not review code, so
+# `coo` must never appear as Reviewer-agent on a code-bearing PR.
+coo  author-only
