@@ -2504,10 +2504,16 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       input.recoveryCause === SUCCESSFUL_RUN_MISSING_STATE_REASON && blockerIds.length === 0
         ? "todo"
         : "blocked";
+    // For missing_disposition with no blockers, return to the prior owner via returnOwnerAgentId
+    // so the issue lands in a live todo queue instead of on a dead wake_owner hook routed to a
+    // supervisor (ownerAgentId) who can't act on it directly.
+    const targetAssignee = targetStatus === "todo"
+      ? (recoveryAction.returnOwnerAgentId ?? input.issue.assigneeAgentId)
+      : (recoveryAction.ownerAgentId ?? input.issue.assigneeAgentId);
     const updated = await issuesSvc.update(input.issue.id, {
       status: targetStatus,
       blockedByIssueIds: blockerIds,
-      assigneeAgentId: recoveryAction.ownerAgentId ?? input.issue.assigneeAgentId,
+      assigneeAgentId: targetAssignee,
     });
     if (!updated) return null;
 
@@ -2621,7 +2627,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       recoveryCause,
     });
 
-    if (recoveryAction.ownerAgentId && recoveryAction.ownerAgentId === input.issue.assigneeAgentId) {
+    if (targetAssignee && targetAssignee === input.issue.assigneeAgentId) {
       const [currentIssue] = await db
         .select({
           status: issues.status,
@@ -2633,12 +2639,12 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       if (
         currentIssue &&
         (currentIssue.status !== targetStatus ||
-          currentIssue.assigneeAgentId !== recoveryAction.ownerAgentId)
+          currentIssue.assigneeAgentId !== targetAssignee)
       ) {
         const reblocked = await issuesSvc.update(input.issue.id, {
           status: targetStatus,
           blockedByIssueIds: blockerIds,
-          assigneeAgentId: recoveryAction.ownerAgentId,
+          assigneeAgentId: targetAssignee,
         });
         if (reblocked) return reblocked;
       }
