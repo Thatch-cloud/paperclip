@@ -61,4 +61,18 @@ describe("dynamic adapter type validation schemas", () => {
 
     expect(AGENT_ROLE_LABELS.security).toBe("Security");
   });
+
+  it("rejects opencode-style model on claude_local", () => {
+    expect(() => createAgentSchema.parse({
+      name: "Bad", adapterType: "claude_local",
+      runtimeConfig: { modelProfiles: { cheap: { adapterConfig: { model: "kimi-for-coding/kimi-for-coding" } } } }
+    })).toThrow();
+  });
+
+  it("accepts claude-* model on claude_local", () => {
+    expect(() => createAgentSchema.parse({
+      name: "Good", adapterType: "claude_local",
+      runtimeConfig: { modelProfiles: { cheap: { adapterConfig: { model: "claude-haiku-4-5" } } } }
+    })).not.toThrow();
+  });
 });

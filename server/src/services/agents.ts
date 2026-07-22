@@ -380,6 +380,12 @@ export function agentService(db: Db, options: { keyManagementDb?: Db } = {}) {
     const existing = await getById(id);
     if (!existing) return null;
 
+    const effectiveAdapterType = data.adapterType ?? existing.adapterType;
+    const cheapModel = (data.runtimeConfig as any)?.modelProfiles?.cheap?.adapterConfig?.model;
+    if (typeof cheapModel === "string" && cheapModel.includes("/") && ["claude_local", "codex_local"].includes(effectiveAdapterType)) {
+      throw unprocessable(`Model "${cheapModel}" uses opencode provider/model format incompatible with adapter "${effectiveAdapterType}"`);
+    }
+
     if (existing.status === "terminated" && data.status && data.status !== "terminated") {
       throw conflict("Terminated agents cannot be resumed");
     }

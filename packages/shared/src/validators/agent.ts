@@ -67,7 +67,7 @@ export const agentRuntimeConfigSchema = z.object({
   }).strict().optional(),
 }).catchall(z.unknown());
 
-export const createAgentSchema = z.object({
+const createAgentSchemaBase = z.object({
   name: z.string().min(1),
   role: z.enum(AGENT_ROLES).optional().default("general"),
   title: z.string().optional().nullable(),
@@ -85,16 +85,32 @@ export const createAgentSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
 });
 
+function guardOpencodeModelOnClaudeOrCodex<T extends { adapterType: string; runtimeConfig?: { modelProfiles?: { cheap?: { adapterConfig?: { model?: unknown } } } } }>(data: T, ctx: z.RefinementCtx) {
+  const cheapModel = data.runtimeConfig?.modelProfiles?.cheap?.adapterConfig?.model;
+  if (typeof cheapModel !== "string" || !cheapModel.includes("/")) return;
+  if (["claude_local", "codex_local"].includes(data.adapterType)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Model "${cheapModel}" uses opencode provider/model format which is incompatible with adapter "${data.adapterType}"`,
+      path: ["runtimeConfig", "modelProfiles", "cheap", "adapterConfig", "model"],
+    });
+  }
+}
+
+export const createAgentSchema = createAgentSchemaBase.superRefine(guardOpencodeModelOnClaudeOrCodex);
+
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
-export const createAgentHireSchema = createAgentSchema.extend({
+const createAgentHireSchemaBase = createAgentSchemaBase.extend({
   sourceIssueId: z.string().uuid().optional().nullable(),
   sourceIssueIds: z.array(z.string().uuid()).optional(),
 });
 
+export const createAgentHireSchema = createAgentHireSchemaBase.superRefine(guardOpencodeModelOnClaudeOrCodex);
+
 export type CreateAgentHire = z.infer<typeof createAgentHireSchema>;
 
-export const updateAgentSchema = createAgentSchema
+export const updateAgentSchema = createAgentSchemaBase
   .omit({ permissions: true })
   .partial()
   .extend({
