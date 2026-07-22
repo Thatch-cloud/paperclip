@@ -749,6 +749,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     retryReason?: "assignment_recovery" | "issue_continuation_needed" | null;
     cause?: string;
     kind?: string;
+    expectedStatus?: "blocked" | "todo";
   }) {
     const action = await waitForValue(async () =>
       db.select().from(issueRecoveryActions).where(
@@ -844,7 +845,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .from(issues)
       .where(eq(issues.id, input.issueId))
       .then((rows) => rows[0] ?? null);
-    expect(sourceIssue?.status).toBe("blocked");
+    expect(sourceIssue?.status).toBe(input.expectedStatus ?? "blocked");
 
     return action;
   }
@@ -1783,6 +1784,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       retryReason: null,
       cause: SUCCESSFUL_RUN_MISSING_STATE_REASON,
       kind: "missing_disposition",
+      expectedStatus: "todo",
     });
     expect(recoveryAction.evidence).toMatchObject({
       sourceRunId,
@@ -1794,7 +1796,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(JSON.stringify(recoveryAction.evidence)).not.toContain("sk-test-successful-handoff-secret");
 
     const sourceIssue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
-    expect(sourceIssue?.status).toBe("blocked");
+    expect(sourceIssue?.status).toBe("todo");
     await expect(sourceBlockerIssueIds(companyId, issueId)).resolves.toEqual([]);
 
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
@@ -1871,12 +1873,76 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       retryReason: null,
       cause: SUCCESSFUL_RUN_MISSING_STATE_REASON,
       kind: "missing_disposition",
+      expectedStatus: "todo",
     });
     expect(recoveryAction.evidence).toMatchObject({
       sourceRunId,
       latestRunStatus: "succeeded",
       missingDisposition: "clear_next_step",
     });
+  });
+
+  it("routes missing_disposition todo escalation to returnOwnerAgentId, not the recovery supervisor", async () => {
+    // Facet 2: when a supervisor (CTO) is the recovery ownerAgentId but the original assignee is
+    // the engineer, the issue should be returned to the engineer (returnOwnerAgentId) as todo,
+    // NOT routed to the CTO via a dead one-shot wake_owner hook.
+    const { companyId, agentId, runId, issueId } = await seedStrandedIssueFixture({
+      status: "in_progress",
+      runStatus: "succeeded",
+      livenessState: "advanced",
+    });
+
+    // Add a CTO-role agent to the company so resolveStrandedIssueRecoveryOwnerAgentId picks it.
+    const ctoAgentId = randomUUID();
+    await db.insert(agents).values({
+      id: ctoAgentId,
+      companyId,
+      name: "CTO",
+      role: "cto",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    // Make the engineer report to the CTO so the chain-of-command check also resolves to CTO.
+    await db.update(agents).set({ reportsTo: ctoAgentId }).where(eq(agents.id, agentId));
+
+    const sourceRunId = randomUUID();
+    await db
+      .update(heartbeatRuns)
+      .set({
+        contextSnapshot: {
+          issueId,
+          taskId: issueId,
+          wakeReason: "finish_successful_run_handoff",
+          sourceRunId,
+          resumeFromRunId: sourceRunId,
+          handoffRequired: true,
+          handoffReason: "successful_run_missing_state",
+          missingDisposition: "clear_next_step",
+          handoffAttempt: 1,
+          maxHandoffAttempts: 1,
+        },
+      })
+      .where(eq(heartbeatRuns.id, runId));
+
+    const heartbeat = heartbeatService(db);
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.successfulRunHandoffEscalated).toBe(1);
+
+    // Recovery action should route to CTO (ownerAgentId) but record engineer as returnOwnerAgentId.
+    const [recoveryAction] = await db
+      .select()
+      .from(issueRecoveryActions)
+      .where(eq(issueRecoveryActions.sourceIssueId, issueId));
+    expect(recoveryAction?.ownerAgentId).toBe(ctoAgentId);
+    expect(recoveryAction?.returnOwnerAgentId).toBe(agentId);
+
+    // The source issue must land back on the engineer (returnOwnerAgentId) as todo — not on CTO.
+    const sourceIssue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(sourceIssue?.status).toBe("todo");
+    expect(sourceIssue?.assigneeAgentId).toBe(agentId);
   });
 
   it("clears the detached warning when the run reports activity again", async () => {
