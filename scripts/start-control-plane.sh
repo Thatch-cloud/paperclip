@@ -37,7 +37,6 @@ if [[ "$MARKER_REF" != "$EXPECTED_REF" ]]; then
   exit 78
 fi
 
-cd "$RELEASE_DIR"
 export PAPERCLIP_CONTROL_PLANE_RELEASE_DIR="$RELEASE_DIR"
 
 echo "start-control-plane: booting Paperclip control plane ref $EXPECTED_REF from $RELEASE_DIR" >&2
