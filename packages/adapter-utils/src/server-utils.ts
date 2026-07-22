@@ -1174,7 +1174,17 @@ export function refreshPaperclipWorkspaceEnvForExecution(input: {
 export function sanitizeInheritedPaperclipEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv };
   for (const key of Object.keys(env)) {
-    if (!key.startsWith("PAPERCLIP_")) continue;
+    if (!key.startsWith("PAPERCLIP_")) {
+      // GH_TOKEN/GITHUB_TOKEN are inherited from the Paperclip server's own
+      // process environment (e.g. a GitHub App token used by the control
+      // plane). If passed to agent child processes they can leak access to the
+      // github-copilot extension catalog or other GitHub-scoped resources, so
+      // strip them along with the rest of the inherited Paperclip env.
+      if (key === "GH_TOKEN" || key === "GITHUB_TOKEN") {
+        delete env[key];
+      }
+      continue;
+    }
     if (key === "PAPERCLIP_RUNTIME_API_URL") continue;
     if (key === "PAPERCLIP_LISTEN_HOST") continue;
     if (key === "PAPERCLIP_LISTEN_PORT") continue;
