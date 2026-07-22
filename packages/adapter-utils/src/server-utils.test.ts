@@ -16,6 +16,7 @@ import {
   runningProcesses,
   runChildProcess,
   sanitizeSshRemoteEnv,
+  sanitizeInheritedPaperclipEnv,
   shapePaperclipWorkspaceEnvForExecution,
   rewriteWorkspaceCwdEnvVarsForExecution,
   stringifyPaperclipWakePayload,
@@ -144,6 +145,40 @@ describe("sanitizeSshRemoteEnv", () => {
         },
       ),
     ).toEqual({ PATH: "/explicit/remote/bin" });
+  });
+});
+
+describe("sanitizeInheritedPaperclipEnv", () => {
+  it("strips all PAPERCLIP_ variables except the runtime listener allow-list", () => {
+    expect(
+      sanitizeInheritedPaperclipEnv({
+        PAPERCLIP_API_URL: "https://api.example.com",
+        PAPERCLIP_TASK_ID: "task-123",
+        PAPERCLIP_RUNTIME_API_URL: "https://runtime.example.com",
+        PAPERCLIP_LISTEN_HOST: "127.0.0.1",
+        PAPERCLIP_LISTEN_PORT: "8080",
+        SAFE_VALUE: "visible",
+      }),
+    ).toEqual({
+      PAPERCLIP_RUNTIME_API_URL: "https://runtime.example.com",
+      PAPERCLIP_LISTEN_HOST: "127.0.0.1",
+      PAPERCLIP_LISTEN_PORT: "8080",
+      SAFE_VALUE: "visible",
+    });
+  });
+
+  it("strips GH_TOKEN and GITHUB_TOKEN to prevent github-copilot catalog leakage", () => {
+    expect(
+      sanitizeInheritedPaperclipEnv({
+        GH_TOKEN: "ghp_leaked_from_server",
+        GITHUB_TOKEN: "ghp_also_leaked_from_server",
+        GITHUB_API_URL: "https://api.github.com",
+        SAFE_VALUE: "visible",
+      }),
+    ).toEqual({
+      GITHUB_API_URL: "https://api.github.com",
+      SAFE_VALUE: "visible",
+    });
   });
 });
 
