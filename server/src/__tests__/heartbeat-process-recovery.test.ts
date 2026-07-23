@@ -1092,6 +1092,115 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(issue?.executionRunId).toBe(retryRun?.id ?? null);
   });
 
+  it("reaps a local run pinned by a stale in-memory handle after its child pid died (THA-4572)", async () => {
+    // A leaked handle (Map entry that outlived the child it pointed at) used to
+    // make the reaper `continue` past the row, pinning a *dead* process in
+    // "running" and starving the agent's slot budget. The reaper must now verify
+    // the pid before trusting the handle.
+    const { runId } = await seedRunFixture({
+      agentStatus: "idle",
+      processPid: 999_999_999, // provably dead
+      processLossRetryCount: 1, // exhaust retry so no retry run is enqueued
+      includeIssue: false,
+    });
+    runningProcesses.set(runId, {
+      child: { pid: 999_999_999 } as ChildProcess,
+      graceSec: 1,
+      processGroupId: null,
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reapOrphanedRuns();
+    expect(result.reaped).toBe(1);
+    expect(result.runIds).toEqual([runId]);
+    expect(runningProcesses.has(runId)).toBe(false);
+
+    const run = await heartbeat.getRun(runId);
+    expect(run?.status).toBe("failed");
+    expect(run?.errorCode).toBe("process_lost");
+  });
+
+  it("does not let a provably-dead running row deadlock dispatch against a queued run (THA-4572)", async () => {
+    // Agent has a single slot. A "running" row whose local child is provably
+    // dead must not consume that slot, otherwise a queued run waits forever.
+    // Before THA-4572 `countRunningRunsForAgent` trusted the DB `status` column
+    // alone, so the dead row pinned `availableSlots` at zero and the queued run
+    // never left the queue.
+    const { companyId, agentId } = await seedRunFixture({
+      agentStatus: "idle",
+      runStatus: "running",
+      processPid: 999_999_999, // dead — must not count against the slot
+      processLossRetryCount: 1,
+      includeIssue: false,
+    });
+    // Pin the slot budget to one so the dead row is the only thing that could
+    // block the queued run.
+    await db
+      .update(agents)
+      .set({ runtimeConfig: { heartbeat: { maxConcurrentRuns: 1 } } })
+      .where(eq(agents.id, agentId));
+
+    // Seed a queued run for the same agent.
+    const queuedRunId = randomUUID();
+    const queuedWakeupId = randomUUID();
+    const queuedIssueId = randomUUID();
+    const queuedNow = new Date("2026-03-19T00:00:00.000Z");
+    await db.insert(agentWakeupRequests).values({
+      id: queuedWakeupId,
+      companyId,
+      agentId,
+      source: "assignment",
+      triggerDetail: "system",
+      reason: "issue_assigned",
+      payload: { issueId: queuedIssueId },
+      status: "queued",
+      runId: queuedRunId,
+      requestedAt: queuedNow,
+      updatedAt: queuedNow,
+    });
+    await db.insert(heartbeatRuns).values({
+      id: queuedRunId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      triggerDetail: "system",
+      status: "queued",
+      wakeupRequestId: queuedWakeupId,
+      contextSnapshot: { issueId: queuedIssueId, taskId: queuedIssueId },
+      updatedAt: queuedNow,
+      createdAt: queuedNow,
+    });
+    await db.insert(issues).values({
+      id: queuedIssueId,
+      companyId,
+      title: "Queued work that must dispatch past a dead running row",
+      status: "in_progress",
+      priority: "medium",
+      assigneeAgentId: agentId,
+      checkoutRunId: queuedRunId,
+      executionRunId: queuedRunId,
+      issueNumber: 1,
+      identifier: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}-1`,
+      startedAt: queuedNow,
+    });
+
+    const heartbeat = heartbeatService(db);
+    await heartbeat.resumeQueuedRuns();
+
+    // The queued run was dispatched out of the queue — proving the dead
+    // "running" row did not hold the only slot. (Before THA-4572 it would have
+    // stayed "queued" indefinitely.)
+    const dispatched = await waitForValue(async () =>
+      db
+        .select({ status: heartbeatRuns.status })
+        .from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, queuedRunId))
+        .then((rows) => (rows[0]?.status && rows[0].status !== "queued" ? rows[0] : null)),
+    );
+    expect(dispatched?.status).not.toBe("queued");
+    await waitForRunToSettle(heartbeat, queuedRunId, 5_000);
+  });
+
   it("blocks the issue when process-loss retry is exhausted and the immediate continuation recovery also fails", async () => {
     mockAdapterExecute.mockRejectedValueOnce(new Error("continuation recovery failed"));
 
