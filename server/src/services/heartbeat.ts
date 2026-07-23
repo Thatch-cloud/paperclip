@@ -6768,6 +6768,36 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return Number(count ?? 0);
   }
 
+  async function countLiveRunningRunsForAgent(agentId: string) {
+    // Liveness-aware slot accounting (THA-4572). `countRunningRunsForAgent`
+    // trusts the DB `status` column, but a "running" row whose tracked local
+    // child is provably dead is not consuming a real slot. Counting it keeps
+    // `availableSlots` at zero between reaper ticks and deadlocks dispatch.
+    // Conservative by design: only runs we are *certain* are dead — a tracked
+    // local-child adapter with a recorded pid that is no longer alive — are
+    // excluded. Everything else (no pid, remote adapter, alive pid) still counts.
+    const runs = await db
+      .select({
+        processPid: heartbeatRuns.processPid,
+        adapterType: agents.adapterType,
+      })
+      .from(heartbeatRuns)
+      .innerJoin(agents, eq(heartbeatRuns.agentId, agents.id))
+      .where(and(eq(heartbeatRuns.agentId, agentId), eq(heartbeatRuns.status, "running")));
+
+    let dead = 0;
+    for (const { processPid, adapterType } of runs) {
+      if (
+        isTrackedLocalChildProcessAdapter(adapterType)
+        && typeof processPid === "number"
+        && !isProcessAlive(processPid)
+      ) {
+        dead++;
+      }
+    }
+    return Math.max(0, runs.length - dead);
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect, companyAgents?: AgentOrgRow[]) {
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
@@ -7457,7 +7487,25 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     const reaped: string[] = [];
 
     for (const { run, adapterType, adapterConfig } of activeRuns) {
-      if (runningProcesses.has(run.id) || activeRunExecutions.has(run.id)) continue;
+      const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
+      const hasInMemoryHandle = runningProcesses.has(run.id) || activeRunExecutions.has(run.id);
+
+      // An in-memory handle normally proves a run is still being driven forward,
+      // so trust it unless it is *provably* stale. The only adapters where a
+      // handle can outlive its process are tracked local-child adapters (a child
+      // SIGKILL'd without a clean "close" event, a leaked Map/Set entry, or a
+      // wedged promise whose underlying pid is gone). For those, if the recorded
+      // pid is no longer alive the handle is stale; drop it and reap the row.
+      // Remote/cloud adapters never have a local pid, so their handle is always
+      // trusted — otherwise any run executing longer than staleThresholdMs would
+      // be falsely reaped while still genuinely running (THA-4572 regression).
+      if (hasInMemoryHandle) {
+        const handleStale = tracksLocalChild
+          && typeof run.processPid === "number"
+          && !isProcessAlive(run.processPid);
+        if (!handleStale) continue;
+        runningProcesses.delete(run.id);
+      }
 
       // Apply staleness threshold to avoid false positives
       if (staleThresholdMs > 0) {
@@ -7465,7 +7513,6 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (now.getTime() - refTime < staleThresholdMs) continue;
       }
 
-      const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
       const processPidAlive = tracksLocalChild && run.processPid && isProcessAlive(run.processPid);
       const processGroupAlive = tracksLocalChild && run.processGroupId && isProcessGroupAlive(run.processGroupId);
       if (processPidAlive) {
@@ -7706,7 +7753,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         return [];
       }
       const policy = parseHeartbeatPolicy(agent);
-      const runningCount = await countRunningRunsForAgent(agentId);
+      const runningCount = await countLiveRunningRunsForAgent(agentId);
       const availableSlots = Math.max(0, policy.maxConcurrentRuns - runningCount);
       if (availableSlots <= 0) return [];
 
