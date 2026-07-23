@@ -7568,6 +7568,91 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return { reaped: reaped.length, runIds: reaped };
   }
 
+  // Minimum age a queued run must reach before the terminal-target reaper will
+  // touch it. This gives the dispatch-time gate (evaluateQueuedRunStaleness /
+  // claimQueuedRun) its normal window to self-cancel the run first — preventing
+  // false positives on healthy dispatch-window rows. 5 min is safely above the
+  // worst-case dispatch latency observed in production (a few seconds).
+  const TERMINAL_TARGET_QUEUED_RUN_REAP_THRESHOLD_MS = 5 * 60 * 1000;
+
+  // Reap queued runs whose contextSnapshot.issueId references a terminal issue
+  // AND that have aged past the dispatch-window threshold.
+  //
+  // Why this function exists (THA-4748 root cause): the standard dispatch-time
+  // staleness gate (evaluateQueuedRunStaleness inside claimQueuedRun) only fires
+  // when a run is actively being dispatched. Runs that target a terminal issue
+  // but are continuously deprioritised behind higher-ranked runs (e.g. because
+  // the sort puts "done"-target runs at rank 1 vs rank 0 for in_progress targets)
+  // can sit in "queued" indefinitely — neither the enqueue-time check nor the
+  // dispatch-time gate ever reaches them. This reaper closes that gap.
+  async function reapTerminalTargetQueuedRuns(opts?: { thresholdMs?: number }) {
+    const thresholdMs = opts?.thresholdMs ?? TERMINAL_TARGET_QUEUED_RUN_REAP_THRESHOLD_MS;
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - thresholdMs);
+
+    // Fetch all queued, never-started runs older than the threshold that carry
+    // a non-null issueId in their context snapshot.
+    const candidates = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.status, "queued"),
+          isNull(heartbeatRuns.startedAt),
+          lt(heartbeatRuns.createdAt, cutoff),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' IS NOT NULL`,
+        ),
+      );
+
+    if (candidates.length === 0) return { reaped: 0, runIds: [] as string[] };
+
+    const issueIds = [...new Set(
+      candidates
+        .map((run) => readNonEmptyString(parseObject(run.contextSnapshot).issueId))
+        .filter((id): id is string => Boolean(id)),
+    )];
+
+    if (issueIds.length === 0) return { reaped: 0, runIds: [] as string[] };
+
+    const issueStatusById = await db
+      .select({ id: issues.id, status: issues.status })
+      .from(issues)
+      .where(inArray(issues.id, issueIds))
+      .then((rows) => new Map(rows.map((r) => [r.id, r.status])));
+
+    const reaped: string[] = [];
+
+    for (const run of candidates) {
+      const issueId = readNonEmptyString(parseObject(run.contextSnapshot).issueId);
+      if (!issueId) continue;
+      const issueStatus = issueStatusById.get(issueId);
+      if (issueStatus !== "done" && issueStatus !== "cancelled") continue;
+
+      const staleness: Extract<QueuedRunStaleness, { stale: true }> = {
+        stale: true,
+        errorCode: "issue_terminal_status",
+        reason: `Cancelled by terminal-target reaper: target issue reached terminal status (${issueStatus}) and this run was not reachable by the dispatch-time gate`,
+        details: { issueId, issueStatus, source: "terminal_target_queued_run_reaper" },
+      };
+
+      await cancelQueuedRunForStaleIssue(run, issueId, staleness);
+      await startNextQueuedRunForAgent(run.agentId);
+      reaped.push(run.id);
+      logger.warn(
+        { runId: run.id, issueId, issueStatus, agentId: run.agentId },
+        "reapTerminalTargetQueuedRuns: cancelled queued run targeting terminal issue",
+      );
+    }
+
+    if (reaped.length > 0) {
+      logger.warn(
+        { reapedCount: reaped.length, runIds: reaped },
+        "reaped terminal-target queued heartbeat runs",
+      );
+    }
+    return { reaped: reaped.length, runIds: reaped };
+  }
+
   async function resumeQueuedRuns() {
     const queuedRuns = await db
       .select({ agentId: heartbeatRuns.agentId })
@@ -11486,6 +11571,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     reportRunActivity: clearDetachedRunWarning,
 
     reapOrphanedRuns,
+    reapTerminalTargetQueuedRuns,
 
     promoteDueScheduledRetries,
     retryScheduledRetryNow,

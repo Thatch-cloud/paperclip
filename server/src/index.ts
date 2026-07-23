@@ -818,6 +818,9 @@ export async function startServer(): Promise<StartedServer> {
         }
       }
 
+      await heartbeat.reapTerminalTargetQueuedRuns().catch((err) => {
+        logger.warn({ err }, "startup reap of terminal-target queued runs failed");
+      });
       const promotion = await heartbeat.promoteDueScheduledRetries();
       await heartbeat.resumeQueuedRuns();
       const reconciled = await heartbeat.reconcileStrandedAssignedIssues();
@@ -889,10 +892,12 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "routine scheduler tick failed");
         });
   
-      // Periodically reap orphaned runs (5-min staleness threshold) and make sure
+      // Periodically reap orphaned runs (5-min staleness threshold), cancel queued
+      // runs whose target issue is already terminal (THA-4748), and make sure
       // persisted queued work is still being driven forward.
       void heartbeat
         .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 })
+        .then(() => heartbeat.reapTerminalTargetQueuedRuns())
         .then(() => heartbeat.promoteDueScheduledRetries())
         .then(async (promotion) => {
           await heartbeat.resumeQueuedRuns();
