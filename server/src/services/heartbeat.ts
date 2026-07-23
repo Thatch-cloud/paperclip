@@ -7490,19 +7490,20 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const tracksLocalChild = isTrackedLocalChildProcessAdapter(adapterType);
       const hasInMemoryHandle = runningProcesses.has(run.id) || activeRunExecutions.has(run.id);
 
-      // An in-memory handle normally proves a run is still being driven forward.
-      // For tracked local-child adapters, though, the handle can outlive the very
-      // process it referenced — a child SIGKILL'd without a clean "close" event,
-      // a leaked Map/Set entry, or a wedged promise whose underlying pid is gone.
-      // Trusting such a stale handle leaves a *dead* process pinned in "running",
-      // which silently consumes the agent's slot budget and deadlocks dispatch
-      // (THA-4572). Verify the pid before trusting the handle; if the child is
-      // provably gone, drop the stale handle and reap the row.
+      // An in-memory handle normally proves a run is still being driven forward,
+      // so trust it unless it is *provably* stale. The only adapters where a
+      // handle can outlive its process are tracked local-child adapters (a child
+      // SIGKILL'd without a clean "close" event, a leaked Map/Set entry, or a
+      // wedged promise whose underlying pid is gone). For those, if the recorded
+      // pid is no longer alive the handle is stale; drop it and reap the row.
+      // Remote/cloud adapters never have a local pid, so their handle is always
+      // trusted — otherwise any run executing longer than staleThresholdMs would
+      // be falsely reaped while still genuinely running (THA-4572 regression).
       if (hasInMemoryHandle) {
-        const handleChildAlive = tracksLocalChild
+        const handleStale = tracksLocalChild
           && typeof run.processPid === "number"
-          && isProcessAlive(run.processPid);
-        if (handleChildAlive) continue;
+          && !isProcessAlive(run.processPid);
+        if (!handleStale) continue;
         runningProcesses.delete(run.id);
       }
 

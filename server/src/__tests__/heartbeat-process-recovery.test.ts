@@ -1120,6 +1120,36 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(run?.errorCode).toBe("process_lost");
   });
 
+  it("does NOT reap a non-local adapter run that still has a live in-memory handle (THA-4572)", async () => {
+    // A remote/cloud adapter (cursor_cloud) records no local child pid; the run
+    // is driven via activeRunExecutions, which is the only proof of life. The
+    // reaper must NOT fail such a row merely because no pid can be proven alive,
+    // otherwise any remote run executing longer than staleThresholdMs is reaped
+    // while still genuinely running (THA-4572 regression).
+    const { runId } = await seedRunFixture({
+      adapterType: "cursor_cloud", // NOT a tracked local-child adapter
+      agentStatus: "idle",
+      runStatus: "running",
+      processPid: null, // remote adapters record no pid
+      processLossRetryCount: 1,
+      includeIssue: false,
+    });
+    // activeRunExecutions is closure-private; runningProcesses stands in for the
+    // unioned hasInMemoryHandle to exercise the same code path.
+    runningProcesses.set(runId, { child: { pid: null } as ChildProcess, graceSec: 1, processGroupId: null });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 });
+    const run = await heartbeat.getRun(runId);
+
+    expect({ reaped: result.reaped, finalStatus: run?.status, errorCode: run?.errorCode }).toEqual({
+      reaped: 0,
+      finalStatus: "running",
+      errorCode: null,
+    });
+    runningProcesses.delete(runId);
+  });
+
   it("does not let a provably-dead running row deadlock dispatch against a queued run (THA-4572)", async () => {
     // Agent has a single slot. A "running" row whose local child is provably
     // dead must not consume that slot, otherwise a queued run waits forever.
