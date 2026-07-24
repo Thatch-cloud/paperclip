@@ -165,6 +165,46 @@ async function expirePendingInteractionsForTerminalIssue(
   }
 }
 
+async function cancelQueuedRunsForTerminalIssue(
+  dbOrTx: Pick<Db, "select" | "update">,
+  issue: { id: string; companyId: string; status: string },
+) {
+  const now = new Date();
+  const errorCode = issue.status === "cancelled" ? "issue_cancelled" : "issue_terminal_status";
+  const reason = `Cancelled because issue reached terminal status (${issue.status}) before the queued run could start`;
+
+  const candidates = await dbOrTx
+    .select({ id: heartbeatRuns.id, wakeupRequestId: heartbeatRuns.wakeupRequestId })
+    .from(heartbeatRuns)
+    .where(
+      and(
+        eq(heartbeatRuns.companyId, issue.companyId),
+        eq(heartbeatRuns.status, "queued"),
+        isNull(heartbeatRuns.startedAt),
+        sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
+      ),
+    );
+
+  let cancelled = 0;
+  for (const run of candidates) {
+    const updated = await dbOrTx
+      .update(heartbeatRuns)
+      .set({ status: "cancelled", finishedAt: now, error: reason, errorCode, updatedAt: now })
+      .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
+      .returning({ id: heartbeatRuns.id });
+    if (updated.length > 0) {
+      cancelled++;
+      if (run.wakeupRequestId) {
+        await dbOrTx
+          .update(agentWakeupRequests)
+          .set({ status: "skipped", finishedAt: now, error: reason, updatedAt: now })
+          .where(eq(agentWakeupRequests.id, run.wakeupRequestId));
+      }
+    }
+  }
+  return { cancelled };
+}
+
 function readStringFromRecord(record: unknown, key: string) {
   if (!record || typeof record !== "object") return null;
   const value = (record as Record<string, unknown>)[key];
@@ -5506,6 +5546,7 @@ export function issueService(db: Db) {
             agentId: actorAgentId ?? null,
             userId: actorUserId ?? null,
           });
+          await cancelQueuedRunsForTerminalIssue(tx, updated);
         }
         if (nextLabelIds !== undefined) {
           await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
