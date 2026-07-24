@@ -5546,7 +5546,12 @@ export function issueService(db: Db) {
             agentId: actorAgentId ?? null,
             userId: actorUserId ?? null,
           });
-          await cancelQueuedRunsForTerminalIssue(tx, updated);
+          // Only cancel queued runs on transition into terminal — not on idempotent
+          // re-PATCHes of an already-terminal issue, which would kill legitimate
+          // resume/comment wakes that evaluateQueuedRunStaleness deliberately keeps.
+          if (existing.status !== issueData.status) {
+            await cancelQueuedRunsForTerminalIssue(tx, updated);
+          }
         }
         if (nextLabelIds !== undefined) {
           await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
