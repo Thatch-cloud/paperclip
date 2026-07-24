@@ -7615,6 +7615,132 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return { reaped: reaped.length, runIds: reaped };
   }
 
+  const TERMINAL_TARGET_QUEUED_RUN_REAP_THRESHOLD_MS = 5 * 60 * 1000; // 5 min buffer
+
+  async function reapTerminalTargetQueuedRuns(opts?: { thresholdMs?: number }) {
+    const thresholdMs = opts?.thresholdMs ?? TERMINAL_TARGET_QUEUED_RUN_REAP_THRESHOLD_MS;
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - thresholdMs);
+
+    const candidates = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.status, "queued"),
+          isNull(heartbeatRuns.startedAt),
+          lt(heartbeatRuns.createdAt, cutoff),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' IS NOT NULL`,
+        ),
+      );
+
+    if (candidates.length === 0) return { reaped: 0, runIds: [] as string[] };
+
+    const issueIds = [...new Set(
+      candidates
+        .map((run) => readNonEmptyString(parseObject(run.contextSnapshot).issueId))
+        .filter((id): id is string => Boolean(id)),
+    )];
+
+    if (issueIds.length === 0) return { reaped: 0, runIds: [] as string[] };
+
+    const issueStatusById = await db
+      .select({ id: issues.id, status: issues.status })
+      .from(issues)
+      .where(inArray(issues.id, issueIds))
+      .then((rows) => new Map(rows.map((r) => [r.id, r.status])));
+
+    const reaped: string[] = [];
+
+    for (const run of candidates) {
+      const issueId = readNonEmptyString(parseObject(run.contextSnapshot).issueId);
+      if (!issueId) continue;
+      const issueStatus = issueStatusById.get(issueId);
+      if (issueStatus !== "done" && issueStatus !== "cancelled") continue;
+
+      const staleness: Extract<QueuedRunStaleness, { stale: true }> = {
+        stale: true,
+        errorCode: "issue_terminal_status",
+        reason: `Cancelled by terminal-target reaper: target issue reached terminal status (${issueStatus}) and this run was not reachable by the dispatch-time gate`,
+        details: { issueId, issueStatus, source: "terminal_target_queued_run_reaper" },
+      };
+
+      await cancelQueuedRunForStaleIssue(run, issueId, staleness);
+      await startNextQueuedRunForAgent(run.agentId);
+      reaped.push(run.id);
+      logger.warn(
+        { runId: run.id, issueId, issueStatus, agentId: run.agentId },
+        "reapTerminalTargetQueuedRuns: cancelled queued run targeting terminal issue",
+      );
+    }
+
+    if (reaped.length > 0) {
+      logger.warn(
+        { reapedCount: reaped.length, runIds: reaped },
+        "reaped terminal-target queued heartbeat runs",
+      );
+    }
+    return { reaped: reaped.length, runIds: reaped };
+  }
+
+  const ORPHANED_QUEUED_RUN_REAP_THRESHOLD_MS = 60 * 60 * 1000; // 60 min
+
+  async function reapOrphanedQueuedRuns(opts?: { thresholdMs?: number }) {
+    const thresholdMs = opts?.thresholdMs ?? ORPHANED_QUEUED_RUN_REAP_THRESHOLD_MS;
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - thresholdMs);
+
+    const candidates = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.status, "queued"),
+          isNull(heartbeatRuns.startedAt),
+          lt(heartbeatRuns.createdAt, cutoff),
+          sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' IS NULL`,
+        ),
+      );
+
+    if (candidates.length === 0) return { reaped: 0, runIds: [] as string[] };
+
+    const reaped: string[] = [];
+    for (const run of candidates) {
+      const now2 = new Date();
+      const reason = "Cancelled by orphaned-queued-run reaper: no target issue and exceeded TTL without being dispatched";
+
+      const cancelled = await db
+        .update(heartbeatRuns)
+        .set({
+          status: "cancelled",
+          finishedAt: now2,
+          error: reason,
+          errorCode: "stale_queued_no_target",
+          updatedAt: now2,
+        })
+        .where(and(eq(heartbeatRuns.id, run.id), eq(heartbeatRuns.status, "queued")))
+        .returning({ id: heartbeatRuns.id });
+
+      if (cancelled.length > 0) {
+        await setWakeupStatus(run.wakeupRequestId, "skipped", { finishedAt: now2, error: reason });
+        await startNextQueuedRunForAgent(run.agentId);
+        reaped.push(run.id);
+        logger.warn(
+          { runId: run.id, agentId: run.agentId },
+          "reapOrphanedQueuedRuns: cancelled orphaned queued run with no target issue",
+        );
+      }
+    }
+
+    if (reaped.length > 0) {
+      logger.warn(
+        { reapedCount: reaped.length, runIds: reaped },
+        "reaped orphaned queued heartbeat runs with no target issue",
+      );
+    }
+    return { reaped: reaped.length, runIds: reaped };
+  }
+
   async function resumeQueuedRuns() {
     const queuedRuns = await db
       .select({ agentId: heartbeatRuns.agentId })
@@ -11533,6 +11659,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     reportRunActivity: clearDetachedRunWarning,
 
     reapOrphanedRuns,
+    reapTerminalTargetQueuedRuns,
+    reapOrphanedQueuedRuns,
 
     promoteDueScheduledRetries,
     retryScheduledRetryNow,

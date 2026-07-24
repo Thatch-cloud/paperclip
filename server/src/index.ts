@@ -818,6 +818,8 @@ export async function startServer(): Promise<StartedServer> {
         }
       }
 
+      await heartbeat.reapTerminalTargetQueuedRuns();
+      await heartbeat.reapOrphanedQueuedRuns();
       const promotion = await heartbeat.promoteDueScheduledRetries();
       await heartbeat.resumeQueuedRuns();
       const reconciled = await heartbeat.reconcileStrandedAssignedIssues();
@@ -893,6 +895,18 @@ export async function startServer(): Promise<StartedServer> {
       // persisted queued work is still being driven forward.
       void heartbeat
         .reapOrphanedRuns({ staleThresholdMs: 5 * 60 * 1000 })
+        .then(() => heartbeat.reapTerminalTargetQueuedRuns())
+        .then(async (terminalReaped) => {
+          if (terminalReaped.reaped > 0) {
+            logger.warn({ ...terminalReaped }, "periodic terminal-target queued-run reaper cancelled runs");
+          }
+        })
+        .then(() => heartbeat.reapOrphanedQueuedRuns())
+        .then(async (orphanReaped) => {
+          if (orphanReaped.reaped > 0) {
+            logger.warn({ ...orphanReaped }, "periodic orphaned queued-run reaper cancelled runs");
+          }
+        })
         .then(() => heartbeat.promoteDueScheduledRetries())
         .then(async (promotion) => {
           await heartbeat.resumeQueuedRuns();
