@@ -2426,7 +2426,7 @@ export function accessRoutes(
   const access = accessService(db);
   const boardAuth = boardAuthService(db);
   const agents = agentService(db);
-  const keyManagementAgents = opts.keyManagementDb ? agentService(opts.keyManagementDb) : agents;
+  const keyManagementAgents = opts.keyManagementDb ? agentService(opts.keyManagementDb, { activityDb: db }) : agents;
   const routeInviteResolutionNetwork = opts.inviteResolutionNetwork
     ? { ...defaultInviteResolutionNetwork, ...opts.inviteResolutionNetwork }
     : inviteResolutionNetwork;
@@ -4179,7 +4179,8 @@ export function accessRoutes(
           name: "initial-join-key",
           scopes: ["read", "write"],
           expiresAt: defaultAgentKeyExpiresAt(),
-        }
+        },
+        { actorType: "system", actorId: "join-claim" },
       );
 
       await logActivity(db, {

@@ -8,7 +8,8 @@ import {
   it,
   vi,
 } from "vitest";
-import { agentApiKeys, agents, companies, createDb } from "@paperclipai/db";
+import { activityLog, agentApiKeys, agents, companies, createDb } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
@@ -41,6 +42,7 @@ describeEmbeddedPostgres("key management DB boundary", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await db.delete(activityLog);
     await db.delete(agentApiKeys);
     await db.delete(agents);
     await db.delete(companies);
@@ -101,16 +103,40 @@ describeEmbeddedPostgres("key management DB boundary", () => {
     const keyManagement = keyManagementDbSpy();
     const svc = agentService(db, { keyManagementDb: keyManagement.db });
 
-    const created = await svc.createApiKey(agentId, {
-      name: "agent test key",
-      scopes: ["read"],
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    });
+    const created = await svc.createApiKey(
+      agentId,
+      { name: "agent test key", scopes: ["read"], expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      { actorType: "user", actorId: "board" },
+    );
     await svc.revokeKey(agentId, created.id);
     await svc.terminate(agentId);
 
     expect(keyManagement.calls.insert).toHaveBeenCalledWith(agentApiKeys);
     expect(keyManagement.calls.update).toHaveBeenCalledWith(agentApiKeys);
+  });
+
+  it("always writes an agent.key_created audit row regardless of which db handles key writes", async () => {
+    const { agentId } = await seedAgent();
+    const keyManagement = keyManagementDbSpy();
+    // Use a separate key db so the route through keyManagementDb is exercised;
+    // activityDb defaults to the main db, which is what we query.
+    const svc = agentService(db, { keyManagementDb: keyManagement.db });
+
+    await svc.createApiKey(
+      agentId,
+      { name: "audited key", scopes: ["write"], expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      { actorType: "system", actorId: "test-runner" },
+    );
+
+    const rows = await db
+      .select()
+      .from(activityLog)
+      .where(eq(activityLog.action, "agent.key_created"));
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].actorType).toBe("system");
+    expect(rows[0].actorId).toBe("test-runner");
+    expect(rows[0].entityId).toBe(agentId);
   });
 
   it("routes destructive agent and company key cleanup through the key management DB", async () => {

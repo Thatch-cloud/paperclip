@@ -26,6 +26,7 @@ import {
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
+import { logActivity, type LogActivityInput } from "./activity-log.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -217,8 +218,9 @@ export function deduplicateAgentName(
   return `${candidateName} ${Date.now()}`;
 }
 
-export function agentService(db: Db, options: { keyManagementDb?: Db } = {}) {
+export function agentService(db: Db, options: { keyManagementDb?: Db; activityDb?: Db } = {}) {
   const keyManagementDb = options.keyManagementDb ?? db;
+  const activityDb = options.activityDb ?? db;
   function currentUtcMonthWindow(now = new Date()) {
     const year = now.getUTCFullYear();
     const month = now.getUTCMonth();
@@ -684,7 +686,7 @@ export function agentService(db: Db, options: { keyManagementDb?: Db } = {}) {
       });
     },
 
-    createApiKey: async (id: string, input: { name: string; scopes: string[]; expiresAt: string }) => {
+    createApiKey: async (id: string, input: { name: string; scopes: string[]; expiresAt: string }, actor: { actorType: LogActivityInput["actorType"]; actorId: string }) => {
       const existing = await getById(id);
       if (!existing) throw notFound("Agent not found");
       if (existing.status === "pending_approval") {
@@ -708,6 +710,16 @@ export function agentService(db: Db, options: { keyManagementDb?: Db } = {}) {
         })
         .returning()
         .then((rows) => rows[0]);
+
+      await logActivity(activityDb, {
+        companyId: existing.companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        action: "agent.key_created",
+        entityType: "agent",
+        entityId: id,
+        details: { keyId: created.id, name: created.name, scopes: created.scopes, expiresAt: created.expiresAt },
+      });
 
       return {
         id: created.id,

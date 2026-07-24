@@ -172,7 +172,7 @@ export function agentRoutes(
 
   const router = Router();
   const svc = agentService(db, { keyManagementDb: options.keyManagementDb });
-  const keyManagementSvc = options.keyManagementDb ? agentService(options.keyManagementDb) : svc;
+  const keyManagementSvc = options.keyManagementDb ? agentService(options.keyManagementDb, { activityDb: db }) : svc;
   const access = accessService(db);
   const approvalsSvc = approvalService(db);
   const budgets = budgetService(db);
@@ -3108,16 +3108,9 @@ export function agentRoutes(
     if (!agent) {
       return;
     }
-    const key = await keyManagementSvc.createApiKey(id, req.body);
-
-    await logActivity(db, {
-      companyId: agent.companyId,
+    const key = await keyManagementSvc.createApiKey(id, req.body, {
       actorType: "user",
       actorId: req.actor.userId ?? "board",
-      action: "agent.key_created",
-      entityType: "agent",
-      entityId: agent.id,
-      details: { keyId: key.id, name: key.name, scopes: key.scopes, expiresAt: key.expiresAt },
     });
 
     res.status(201).json(key);
