@@ -7658,6 +7658,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const issueStatus = issueStatusById.get(issueId);
       if (issueStatus !== "done" && issueStatus !== "cancelled") continue;
 
+      // Mirror evaluateQueuedRunStaleness: skip runs carrying a resume intent or a
+      // comment-wake id — these are valid post-close interactions that the dispatch-
+      // time gate deliberately keeps alive.
+      const ctx = parseObject(run.contextSnapshot);
+      const wakeCommentId = deriveCommentId(ctx, null);
+      const resumeIntent = ctx.resumeIntent === true || ctx.followUpRequested === true;
+      if (resumeIntent || wakeCommentId) continue;
+
       const staleness: Extract<QueuedRunStaleness, { stale: true }> = {
         stale: true,
         errorCode: "issue_terminal_status",

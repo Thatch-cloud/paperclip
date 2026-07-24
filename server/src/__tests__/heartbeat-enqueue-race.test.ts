@@ -397,4 +397,132 @@ describeEmbeddedPostgres("heartbeat enqueue-vs-dispatch race fixes", () => {
 
     expect(run?.status).toBe("queued");
   });
+
+  it("cancel-at-close is transition-only: re-PATCH of already-done issue does not cancel queued runs", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Already closed issue",
+      status: "done",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    });
+
+    const { runId } = await seedQueuedRunForIssue({ companyId, agentId, issueId });
+
+    const issueSvc = issueService(db);
+    await issueSvc.update(issueId, { status: "done", actorAgentId: agentId });
+
+    const run = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+
+    expect(run?.status).toBe("queued");
+  });
+
+  it("reapTerminalTargetQueuedRuns spares runs with wakeCommentId on a terminal issue", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+    const commentId = randomUUID();
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Done issue with pending comment wake",
+      status: "done",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    });
+
+    const wakeupRequestId = randomUUID();
+    const runId = randomUUID();
+    await db.insert(agentWakeupRequests).values({
+      id: wakeupRequestId,
+      companyId,
+      agentId,
+      source: "issue_comment",
+      triggerDetail: "comment",
+      reason: "issue_commented",
+      payload: { issueId, commentId },
+      status: "queued",
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "issue_comment",
+      triggerDetail: "comment",
+      status: "queued",
+      wakeupRequestId,
+      contextSnapshot: { issueId, wakeCommentId: commentId, wakeReason: "issue_commented" },
+    });
+    await db.update(agentWakeupRequests).set({ runId }).where(eq(agentWakeupRequests.id, wakeupRequestId));
+
+    const result = await heartbeat.reapTerminalTargetQueuedRuns({ thresholdMs: 0 });
+
+    expect(result.reaped).toBe(0);
+
+    const run = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+
+    expect(run?.status).toBe("queued");
+  });
+
+  it("reapTerminalTargetQueuedRuns spares runs with resumeIntent on a terminal issue", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Done issue with pending resume wake",
+      status: "done",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    });
+
+    const wakeupRequestId = randomUUID();
+    const runId = randomUUID();
+    await db.insert(agentWakeupRequests).values({
+      id: wakeupRequestId,
+      companyId,
+      agentId,
+      source: "on_demand",
+      triggerDetail: "resume",
+      reason: "resume_intent",
+      payload: { issueId },
+      status: "queued",
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "on_demand",
+      triggerDetail: "resume",
+      status: "queued",
+      wakeupRequestId,
+      contextSnapshot: { issueId, resumeIntent: true, wakeReason: "resume" },
+    });
+    await db.update(agentWakeupRequests).set({ runId }).where(eq(agentWakeupRequests.id, wakeupRequestId));
+
+    const result = await heartbeat.reapTerminalTargetQueuedRuns({ thresholdMs: 0 });
+
+    expect(result.reaped).toBe(0);
+
+    const run = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+
+    expect(run?.status).toBe("queued");
+  });
 });
