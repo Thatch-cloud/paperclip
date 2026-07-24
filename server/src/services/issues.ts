@@ -5546,7 +5546,9 @@ export function issueService(db: Db) {
             agentId: actorAgentId ?? null,
             userId: actorUserId ?? null,
           });
-          await cancelQueuedRunsForTerminalIssue(tx, updated);
+          if (existing.status !== issueData.status) {
+            await cancelQueuedRunsForTerminalIssue(tx, updated);
+          }
         }
         if (nextLabelIds !== undefined) {
           await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
