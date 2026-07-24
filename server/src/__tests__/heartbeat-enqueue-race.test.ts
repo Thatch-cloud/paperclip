@@ -365,6 +365,152 @@ describeEmbeddedPostgres("heartbeat enqueue-vs-dispatch race fixes", () => {
     expect(wakeup?.status).toBe("skipped");
   });
 
+  it("cancel-at-close does not cancel queued runs on a re-PATCH of an already-terminal issue", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+
+    // Issue starts done (already terminal)
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Already done task",
+      status: "done",
+      priority: "medium",
+      assigneeAgentId: agentId,
+    });
+
+    // Queue a run — simulates a resumeIntent / comment wake that arrived after close
+    const { runId } = await seedQueuedRunForIssue({ companyId, agentId, issueId });
+
+    // Re-PATCH status: "done" on an already-done issue (no-op transition)
+    const svc = issueService(db);
+    await svc.update(issueId, { status: "done" });
+
+    // The queued run must NOT have been cancelled by cancel-at-close
+    const run = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+
+    expect(run?.status).toBe("queued");
+  });
+
+  it("reapTerminalTargetQueuedRuns does not reap runs with resumeIntent on a terminal issue", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Done task with a resume wake",
+      status: "done",
+      priority: "medium",
+    });
+
+    const wakeupRequestId = randomUUID();
+    const runId = randomUUID();
+    await db.insert(agentWakeupRequests).values({
+      id: wakeupRequestId,
+      companyId,
+      agentId,
+      source: "on_demand",
+      triggerDetail: "system",
+      reason: "issue_commented",
+      payload: { issueId },
+      status: "queued",
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "on_demand",
+      triggerDetail: "system",
+      status: "queued",
+      wakeupRequestId,
+      contextSnapshot: { issueId, resumeIntent: true },
+    });
+    await db
+      .update(agentWakeupRequests)
+      .set({ runId })
+      .where(eq(agentWakeupRequests.id, wakeupRequestId));
+
+    await db
+      .update(heartbeatRuns)
+      .set({ createdAt: new Date(Date.now() - 10 * 60 * 1000) })
+      .where(eq(heartbeatRuns.id, runId));
+
+    const result = await heartbeat.reapTerminalTargetQueuedRuns({ thresholdMs: 0 });
+
+    expect(result.reaped).toBe(0);
+
+    const run = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+
+    expect(run?.status).toBe("queued");
+  });
+
+  it("reapTerminalTargetQueuedRuns does not reap runs with wakeCommentId on a terminal issue", async () => {
+    const { companyId, agentId } = await seedCompanyAndAgent();
+    const issueId = randomUUID();
+    const commentId = randomUUID();
+
+    await db.insert(issues).values({
+      id: issueId,
+      companyId,
+      title: "Cancelled task with a comment wake",
+      status: "cancelled",
+      priority: "medium",
+    });
+
+    const wakeupRequestId = randomUUID();
+    const runId = randomUUID();
+    await db.insert(agentWakeupRequests).values({
+      id: wakeupRequestId,
+      companyId,
+      agentId,
+      source: "on_demand",
+      triggerDetail: "system",
+      reason: "issue_commented",
+      payload: { issueId },
+      status: "queued",
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "on_demand",
+      triggerDetail: "system",
+      status: "queued",
+      wakeupRequestId,
+      contextSnapshot: { issueId, wakeCommentId: commentId },
+    });
+    await db
+      .update(agentWakeupRequests)
+      .set({ runId })
+      .where(eq(agentWakeupRequests.id, wakeupRequestId));
+
+    await db
+      .update(heartbeatRuns)
+      .set({ createdAt: new Date(Date.now() - 10 * 60 * 1000) })
+      .where(eq(heartbeatRuns.id, runId));
+
+    const result = await heartbeat.reapTerminalTargetQueuedRuns({ thresholdMs: 0 });
+
+    expect(result.reaped).toBe(0);
+
+    const run = await db
+      .select({ status: heartbeatRuns.status })
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, runId))
+      .then((rows) => rows[0] ?? null);
+
+    expect(run?.status).toBe("queued");
+  });
+
   it("reapOrphanedQueuedRuns does not reap queued runs that have an issueId", async () => {
     const { companyId, agentId } = await seedCompanyAndAgent();
     const issueId = randomUUID();

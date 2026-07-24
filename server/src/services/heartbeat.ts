@@ -7658,6 +7658,11 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       const issueStatus = issueStatusById.get(issueId);
       if (issueStatus !== "done" && issueStatus !== "cancelled") continue;
 
+      const context = parseObject(run.contextSnapshot);
+      const candidateWakeCommentId = deriveCommentId(context, null);
+      const candidateResumeIntent = context.resumeIntent === true || context.followUpRequested === true;
+      if (candidateResumeIntent || candidateWakeCommentId) continue;
+
       const staleness: Extract<QueuedRunStaleness, { stale: true }> = {
         stale: true,
         errorCode: "issue_terminal_status",
