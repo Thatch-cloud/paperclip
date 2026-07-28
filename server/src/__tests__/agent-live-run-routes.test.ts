@@ -361,7 +361,7 @@ describe("agent live run routes", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     const bodyText = JSON.stringify(res.body);
     expect(bodyText).toContain("PAPERCLIP_API_KEY=***REDACTED***");
-    expect(bodyText).toContain("DATABASE_URL=***REDACTED***");
+    expect(bodyText).toContain("DATABASE_URL=postgres://***REDACTED***@host/db");
     expect(bodyText).toContain("AUTH_SECRET=***REDACTED***");
     expect(bodyText).toContain("THATCH_ADMIN_SEED_PASSWORD=***REDACTED***");
     expect(bodyText).toContain("PUBLIC_STATUS_URL=https://host/status");
