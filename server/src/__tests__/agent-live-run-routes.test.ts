@@ -8,6 +8,8 @@ const mockAgentService = vi.hoisted(() => ({
 
 const mockHeartbeatService = vi.hoisted(() => ({
   buildRunOutputSilence: vi.fn(),
+  getRun: vi.fn(),
+  getRetryExhaustedReason: vi.fn(),
   getRunIssueSummary: vi.fn(),
   getActiveRunIssueSummaryForAgent: vi.fn(),
   getRunLogAccess: vi.fn(),
@@ -194,6 +196,27 @@ describe("agent live run routes", () => {
     });
     mockInstanceSettingsService.listCompanyIds.mockResolvedValue(["company-1"]);
     mockHeartbeatService.buildRunOutputSilence.mockResolvedValue(null);
+    mockHeartbeatService.getRetryExhaustedReason.mockResolvedValue(null);
+    mockHeartbeatService.getRun.mockResolvedValue({
+      id: "run-1",
+      companyId: "company-1",
+      agentId: "agent-1",
+      status: "succeeded",
+      resultJson: {
+        stdout: [
+          "PAPERCLIP_API_KEY=fake-paperclip-run-token",
+          "DATABASE_URL=postgres://user:password@host/db",
+          "AUTH_SECRET=fake-auth-secret",
+          "PUBLIC_STATUS_URL=https://host/status",
+        ].join("\n"),
+      },
+      stdoutExcerpt: "THATCH_ADMIN_SEED_PASSWORD=fake-admin-seed-password",
+      contextSnapshot: {
+        paperclipSecrets: {
+          manifest: [{ envKey: "GH_TOKEN", secretKey: "github_token" }],
+        },
+      },
+    });
     mockHeartbeatService.getRunIssueSummary.mockResolvedValue({
       id: "run-1",
       status: "running",
@@ -327,6 +350,26 @@ describe("agent live run routes", () => {
       content: "chunk",
       nextOffset: 5,
     });
+  });
+
+  it("redacts secret-like run detail output before rendering", async () => {
+    const res = await requestApp(
+      await createApp(),
+      (baseUrl) => request(baseUrl).get("/api/heartbeat-runs/run-1"),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const bodyText = JSON.stringify(res.body);
+    expect(bodyText).toContain("PAPERCLIP_API_KEY=***REDACTED***");
+    expect(bodyText).toContain("DATABASE_URL=postgres://***REDACTED***@host/db");
+    expect(bodyText).toContain("AUTH_SECRET=***REDACTED***");
+    expect(bodyText).toContain("THATCH_ADMIN_SEED_PASSWORD=***REDACTED***");
+    expect(bodyText).toContain("PUBLIC_STATUS_URL=https://host/status");
+    expect(bodyText).not.toContain("fake-paperclip-run-token");
+    expect(bodyText).not.toContain("user:password");
+    expect(bodyText).not.toContain("fake-auth-secret");
+    expect(bodyText).not.toContain("fake-admin-seed-password");
+    expect(res.body.contextSnapshot.paperclipSecrets).toBe("***REDACTED***");
   });
 
   it("caps company live run polling by default", async () => {

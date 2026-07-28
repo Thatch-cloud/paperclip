@@ -3462,12 +3462,11 @@ export function agentRoutes(
     }
     assertCompanyAccess(req, run.companyId);
     const retryExhaustedReason = await heartbeat.getRetryExhaustedReason(runId);
-    res.json(
-      redactCurrentUserValue(
-        { ...run, retryExhaustedReason, outputSilence: await heartbeat.buildRunOutputSilence(run) },
-        await getCurrentUserRedactionOptions(),
-      ),
+    const currentUserRedacted = redactCurrentUserValue(
+      { ...run, retryExhaustedReason, outputSilence: await heartbeat.buildRunOutputSilence(run) },
+      await getCurrentUserRedactionOptions(),
     );
+    res.json(redactEventPayload(currentUserRedacted) ?? currentUserRedacted);
   });
 
   router.post("/heartbeat-runs/:runId/cancel", async (req, res) => {
