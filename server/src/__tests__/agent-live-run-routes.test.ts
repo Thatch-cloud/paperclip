@@ -13,6 +13,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
   getRunIssueSummary: vi.fn(),
   getActiveRunIssueSummaryForAgent: vi.fn(),
   getRunLogAccess: vi.fn(),
+  listEvents: vi.fn(),
   readLog: vi.fn(),
   wakeup: vi.fn(),
 }));
@@ -245,6 +246,26 @@ describe("agent live run routes", () => {
       content: "chunk",
       nextOffset: 5,
     });
+    mockHeartbeatService.listEvents.mockResolvedValue([
+      {
+        id: "event-1",
+        companyId: "company-1",
+        runId: "run-1",
+        agentId: "agent-1",
+        seq: 1,
+        eventType: "adapter.output",
+        stream: "stdout",
+        level: "info",
+        color: null,
+        message: [
+          "PAPERCLIP_API_KEY=fake-paperclip-run-token",
+          "DATABASE_URL=postgres://user:password@host/db",
+          "PUBLIC_STATUS_URL=https://host/status",
+        ].join("\n"),
+        payload: { safe: "visible" },
+        createdAt: new Date("2026-04-10T09:30:00.000Z"),
+      },
+    ]);
     mockHeartbeatService.wakeup.mockResolvedValue({
       id: "run-1",
       companyId: "company-1",
@@ -370,6 +391,22 @@ describe("agent live run routes", () => {
     expect(bodyText).not.toContain("fake-auth-secret");
     expect(bodyText).not.toContain("fake-admin-seed-password");
     expect(res.body.contextSnapshot.paperclipSecrets).toBe("***REDACTED***");
+  });
+
+  it("redacts secret-like event messages before rendering", async () => {
+    const res = await requestApp(
+      await createApp(),
+      (baseUrl) => request(baseUrl).get("/api/heartbeat-runs/run-1/events?limit=25"),
+    );
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockHeartbeatService.listEvents).toHaveBeenCalledWith("run-1", 0, 25);
+    const bodyText = JSON.stringify(res.body);
+    expect(bodyText).toContain("PAPERCLIP_API_KEY=***REDACTED***");
+    expect(bodyText).toContain("DATABASE_URL=postgres://***REDACTED***@host/db");
+    expect(bodyText).toContain("PUBLIC_STATUS_URL=https://host/status");
+    expect(bodyText).not.toContain("fake-paperclip-run-token");
+    expect(bodyText).not.toContain("user:password");
   });
 
   it("caps company live run polling by default", async () => {
