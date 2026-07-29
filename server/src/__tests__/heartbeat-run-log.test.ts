@@ -54,4 +54,51 @@ describe("compactRunLogChunk", () => {
     expect(compacted).not.toContain("user:password");
     expect(compacted).not.toContain("fake-admin-seed-password");
   });
+
+  it("collapses broad env-style dumps before persisting run-log chunks", () => {
+    const chunk = [
+      "HOME=/home/tester",
+      "PATH=/usr/local/bin:/usr/bin",
+      "SHELL=/bin/bash",
+      "LANG=C.UTF-8",
+      "TERM=xterm-256color",
+      "PWD=/workspace/project",
+      "USER=tester",
+      "LOGNAME=tester",
+      "TMPDIR=/tmp",
+      "EDITOR=vim",
+    ].join("\n");
+
+    const compacted = compactRunLogChunk(chunk);
+
+    expect(compacted).toBe("[paperclip redacted environment dump: 10 env-style lines]");
+    expect(compacted).not.toContain("/home/tester");
+    expect(compacted).not.toContain("/workspace/project");
+  });
+
+  it("redacts Paperclip runtime env dumps even below the broad env threshold", () => {
+    const chunk = [
+      "PAPERCLIP_AGENT_ID=agent-id-value",
+      "export PAPERCLIP_RUN_ID=run-id-value",
+      "PAPERCLIP_API_KEY=run-token-value",
+    ].join("\n");
+
+    const compacted = compactRunLogChunk(chunk);
+
+    expect(compacted).toBe("[paperclip redacted environment dump: 3 env-style lines]");
+    expect(compacted).not.toContain("agent-id-value");
+    expect(compacted).not.toContain("run-id-value");
+    expect(compacted).not.toContain("run-token-value");
+  });
+
+  it("redacts a narrow Paperclip env diagnostic without dropping nearby output", () => {
+    const chunk = ["before", "PAPERCLIP_TASK_ID=task-id-value", "after"].join("\n");
+
+    const compacted = compactRunLogChunk(chunk);
+
+    expect(compacted).toContain("before");
+    expect(compacted).toContain("PAPERCLIP_TASK_ID=***REDACTED***");
+    expect(compacted).toContain("after");
+    expect(compacted).not.toContain("task-id-value");
+  });
 });

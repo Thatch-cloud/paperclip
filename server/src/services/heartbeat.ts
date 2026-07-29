@@ -174,7 +174,7 @@ import {
   redactCurrentUserValue,
   type CurrentUserRedactionOptions,
 } from "../log-redaction.js";
-import { redactEventPayload, redactSensitiveText } from "../redaction.js";
+import { REDACTED_EVENT_VALUE, redactEventPayload, redactSensitiveText } from "../redaction.js";
 import {
   hasSessionCompactionThresholds,
   resolveSessionCompactionPolicy,
@@ -404,6 +404,10 @@ const SESSIONED_LOCAL_ADAPTERS = new Set([
   "pi_local",
 ]);
 const INLINE_BASE64_IMAGE_DATA_RE = /("type":"image","source":\{"type":"base64","data":")([A-Za-z0-9+/=]{1024,})(")/g;
+const ENV_ASSIGNMENT_LINE_RE = /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=.*/;
+const PAPERCLIP_ENV_ASSIGNMENT_LINE_RE = /^(?:export\s+)?(PAPERCLIP_[A-Z0-9_]*=).*/;
+const BROAD_ENV_DUMP_MIN_LINES = 8;
+const PAPERCLIP_ENV_DUMP_MIN_LINES = 3;
 
 type RuntimeConfigSecretResolver = Pick<
   ReturnType<typeof secretService>,
@@ -1380,8 +1384,46 @@ function redactInlineBase64ImageData(chunk: string) {
   );
 }
 
+function redactPaperclipEnvAssignments(chunk: string) {
+  return chunk.replace(
+    /^((?:export\s+)?PAPERCLIP_[A-Z0-9_]*=).*$/gm,
+    `$1${REDACTED_EVENT_VALUE}`,
+  );
+}
+
+function redactBroadEnvDumpBlocks(chunk: string) {
+  const lines = chunk.split("\n");
+  const redacted: string[] = [];
+  let block: string[] = [];
+
+  function flushBlock() {
+    if (block.length === 0) return;
+    const paperclipLines = block.filter((line) => PAPERCLIP_ENV_ASSIGNMENT_LINE_RE.test(line)).length;
+    if (block.length >= BROAD_ENV_DUMP_MIN_LINES || paperclipLines >= PAPERCLIP_ENV_DUMP_MIN_LINES) {
+      redacted.push(`[paperclip redacted environment dump: ${block.length} env-style lines]`);
+    } else {
+      redacted.push(...block);
+    }
+    block = [];
+  }
+
+  for (const line of lines) {
+    if (ENV_ASSIGNMENT_LINE_RE.test(line)) {
+      block.push(line);
+      continue;
+    }
+    flushBlock();
+    redacted.push(line);
+  }
+  flushBlock();
+
+  return redacted.join("\n");
+}
+
 export function compactRunLogChunk(chunk: string, maxChars = MAX_PERSISTED_LOG_CHUNK_CHARS) {
-  const normalized = redactSensitiveText(redactInlineBase64ImageData(chunk));
+  const normalized = redactSensitiveText(
+    redactBroadEnvDumpBlocks(redactPaperclipEnvAssignments(redactInlineBase64ImageData(chunk))),
+  );
   if (normalized.length <= maxChars) return normalized;
 
   const headChars = Math.max(0, Math.floor(maxChars * 0.6));
