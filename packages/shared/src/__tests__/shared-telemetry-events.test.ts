@@ -10,8 +10,8 @@ import {
   trackTrainingLifecycle,
   trackTrainingQueueWait,
   trackTrainingThroughput,
-} from "@paperclipai/shared/telemetry";
-import type { TelemetryClient } from "@paperclipai/shared/telemetry";
+} from "../telemetry/events.js";
+import type { TelemetryClient } from "../telemetry/client.js";
 
 function createClient(): TelemetryClient {
   return {
