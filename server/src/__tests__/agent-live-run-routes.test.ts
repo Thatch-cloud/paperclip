@@ -382,7 +382,7 @@ describe("agent live run routes", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     const bodyText = JSON.stringify(res.body);
     expect(bodyText).toContain("PAPERCLIP_API_KEY=***REDACTED***");
-    expect(bodyText).toContain("DATABASE_URL=postgres://***REDACTED***@host/db");
+    expect(bodyText).toContain("DATABASE_URL=***REDACTED***");
     expect(bodyText).toContain("AUTH_SECRET=***REDACTED***");
     expect(bodyText).toContain("THATCH_ADMIN_SEED_PASSWORD=***REDACTED***");
     expect(bodyText).toContain("PUBLIC_STATUS_URL=https://host/status");
@@ -403,7 +403,7 @@ describe("agent live run routes", () => {
     expect(mockHeartbeatService.listEvents).toHaveBeenCalledWith("run-1", 0, 25);
     const bodyText = JSON.stringify(res.body);
     expect(bodyText).toContain("PAPERCLIP_API_KEY=***REDACTED***");
-    expect(bodyText).toContain("DATABASE_URL=postgres://***REDACTED***@host/db");
+    expect(bodyText).toContain("DATABASE_URL=***REDACTED***");
     expect(bodyText).toContain("PUBLIC_STATUS_URL=https://host/status");
     expect(bodyText).not.toContain("fake-paperclip-run-token");
     expect(bodyText).not.toContain("user:password");
