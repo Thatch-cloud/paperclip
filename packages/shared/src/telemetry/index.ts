@@ -14,6 +14,18 @@ export {
   trackAgentFirstHeartbeat,
   trackAgentTaskCompleted,
   trackErrorHandlerCrash,
+  trackTrainingLifecycle,
+  trackTrainingThroughput,
+  trackTrainingEvalGate,
+  trackTrainingAcceleratorUtilization,
+  trackTrainingCheckpoint,
+  trackTrainingQueueWait,
+} from "./events.js";
+export type {
+  TrainingLifecycleState,
+  TrainingEvalGateOutcome,
+  TrainingCheckpointState,
+  TrainingTelemetryIdentity,
 } from "./events.js";
 export type {
   TelemetryConfig,
