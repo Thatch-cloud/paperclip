@@ -1,7 +1,7 @@
 import { redactCommandText } from "@paperclipai/adapter-utils";
 
 const SECRET_FIELD_NAME_PATTERN =
-  String.raw`[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?token|auth(?:_?token)?|token|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring)[A-Za-z0-9_-]*`;
+  String.raw`[A-Za-z0-9_-]*(?:api[-_]?key|access[-_]?token|auth(?:_?token)?|token|authorization|bearer|secret|passwd|password|credential|jwt|private[-_]?key|cookie|connectionstring|database[-_]?url)[A-Za-z0-9_-]*`;
 
 const SECRET_PAYLOAD_KEY_RE = new RegExp(SECRET_FIELD_NAME_PATTERN, "i");
 const COMMAND_PAYLOAD_KEY_RE =
@@ -17,6 +17,9 @@ const ESCAPED_JSON_SECRET_FIELD_TEXT_RE = new RegExp(
   String.raw`((?:\\")?${SECRET_FIELD_NAME_PATTERN}(?:\\")?\s*:\s*(?:\\"))[^\\\r\n]+((?:\\"))`,
   "gi",
 );
+const ENV_SECRET_ASSIGNMENT_TEXT_RE = /^((?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=)(["']?)[^\r\n]*$/gm;
+const HIGH_RISK_ENV_KEY_RE =
+  /^(?:GH_TOKEN|GITHUB_TOKEN|PAPERCLIP_API_KEY|DATABASE_URL|BETTER_AUTH_SECRET|(?:CLOUDFLARE|CF)_[A-Z0-9_]*(?:TOKEN|KEY|SECRET|CREDENTIAL|PASSWORD)[A-Z0-9_]*)$/i;
 const SECRET_TEXT_HINTS = [
   "api",
   "key",
@@ -42,6 +45,16 @@ export const REDACTED_EVENT_VALUE = "***REDACTED***";
 function maybeContainsSecretText(input: string) {
   const lower = input.toLowerCase();
   return SECRET_TEXT_HINTS.some((hint) => lower.includes(hint)) || input.includes(".");
+}
+
+function redactEnvSecretAssignments(input: string) {
+  return input.replace(
+    ENV_SECRET_ASSIGNMENT_TEXT_RE,
+    (line: string, prefix: string, key: string, quote: string) => {
+      if (!HIGH_RISK_ENV_KEY_RE.test(key) && !SECRET_PAYLOAD_KEY_RE.test(key)) return line;
+      return `${prefix}${quote}${REDACTED_EVENT_VALUE}${quote}`;
+    },
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -125,9 +138,10 @@ export function redactEventPayload(payload: Record<string, unknown> | null): Rec
 }
 
 export function redactSensitiveText(input: string): string {
-  if (!maybeContainsSecretText(input)) return input;
+  const envRedacted = redactEnvSecretAssignments(input);
+  if (!maybeContainsSecretText(envRedacted)) return envRedacted;
   return redactCommandText(
-    input
+    envRedacted
       .replace(JSON_SECRET_FIELD_TEXT_RE, `$1${REDACTED_EVENT_VALUE}$2`)
       .replace(ESCAPED_JSON_SECRET_FIELD_TEXT_RE, `$1${REDACTED_EVENT_VALUE}$2`),
     REDACTED_EVENT_VALUE,

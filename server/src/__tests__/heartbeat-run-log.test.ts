@@ -101,4 +101,41 @@ describe("compactRunLogChunk", () => {
     expect(compacted).toContain("after");
     expect(compacted).not.toContain("task-id-value");
   });
+
+  it("redacts high-risk env vars and token-shaped values from captured command output", () => {
+    const githubPat = "ghp_1234567890abcdefghijklmnopqrstuv";
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signaturepart";
+    const chunk = [
+      "GH_TOKEN=shortghvalue",
+      "GITHUB_TOKEN=shortgithubvalue",
+      "PAPERCLIP_API_KEY=shortpaperclipvalue",
+      "DATABASE_URL=postgres://user:password@db.internal/app",
+      "BETTER_AUTH_SECRET=shortauthvalue",
+      "CLOUDFLARE_API_TOKEN=shortcloudflarevalue",
+      "CF_R2_SECRET_ACCESS_KEY=shortcfvalue",
+      `Authorization: Bearer ${jwt}`,
+      `git remote https://x-access-token:${githubPat}@github.com/acme/repo.git`,
+      "SAFE_PUBLIC_URL=https://example.test/healthz",
+    ].join("\n");
+
+    const compacted = compactRunLogChunk(chunk);
+
+    expect(compacted).toContain("GH_TOKEN=***REDACTED***");
+    expect(compacted).toContain("GITHUB_TOKEN=***REDACTED***");
+    expect(compacted).toContain("PAPERCLIP_API_KEY=***REDACTED***");
+    expect(compacted).toContain("DATABASE_URL=***REDACTED***");
+    expect(compacted).toContain("BETTER_AUTH_SECRET=***REDACTED***");
+    expect(compacted).toContain("CLOUDFLARE_API_TOKEN=***REDACTED***");
+    expect(compacted).toContain("CF_R2_SECRET_ACCESS_KEY=***REDACTED***");
+    expect(compacted).toContain("SAFE_PUBLIC_URL=https://example.test/healthz");
+    expect(compacted).not.toContain("shortghvalue");
+    expect(compacted).not.toContain("shortgithubvalue");
+    expect(compacted).not.toContain("shortpaperclipvalue");
+    expect(compacted).not.toContain("user:password");
+    expect(compacted).not.toContain("shortauthvalue");
+    expect(compacted).not.toContain("shortcloudflarevalue");
+    expect(compacted).not.toContain("shortcfvalue");
+    expect(compacted).not.toContain(jwt);
+    expect(compacted).not.toContain(githubPat);
+  });
 });
