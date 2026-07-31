@@ -322,13 +322,14 @@ export function TrainingEconomicsSection() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader className="px-5 pt-5 pb-2">
-          <CardTitle className="text-base">Financial benchmark</CardTitle>
-          <CardDescription>
-            Managed fine-tune and inference workloads used for the financial benchmark. Spark training is kept separate.
-          </CardDescription>
-        </CardHeader>
+        <Card>
+          <CardHeader className="px-5 pt-5 pb-2">
+            <CardTitle className="text-base">Financial benchmark</CardTitle>
+            <CardDescription>
+              Managed fine-tune and inference workloads used for the financial benchmark. Spark training is excluded.
+              <ProvenanceBadge provenance={summary.financialBenchmark.provenance} />
+            </CardDescription>
+          </CardHeader>
         <CardContent className="px-5 pb-5 pt-2">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div className="border border-border p-3">
@@ -336,7 +337,7 @@ export function TrainingEconomicsSection() {
               <div className="mt-1 text-xl font-semibold tabular-nums">
                 {formatCents(summary.financialBenchmark.totalCostCents)}
               </div>
-              <div className="text-xs text-muted-foreground">Managed fine-tune and inference</div>
+              <div className="text-xs text-muted-foreground">Managed fine-tune and inference workloads included in benchmark</div>
             </div>
             <div className="border border-border p-3">
               <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Spark training</div>
