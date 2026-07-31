@@ -16,7 +16,7 @@ export const Default: Story = {
     docs: {
       description: {
         story:
-          "Training economics summary rendered within the Costs surface. Includes provenance badges, lane margins, node utilization, train-vs-inference recommendation, and the financial benchmark that excludes spark training.",
+          "Training economics summary rendered within the Costs surface. Includes provenance badges, lane margins, node utilization, train-vs-inference recommendation, and the financial benchmark that excludes Spark training.",
       },
     },
   },

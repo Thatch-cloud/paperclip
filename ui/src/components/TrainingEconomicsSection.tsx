@@ -178,7 +178,7 @@ export function TrainingEconomicsSection() {
         <MetricTile
           label="Total cost"
           value={formatCents(summary.summary.totalCostCents.value)}
-          subtitle="Cost of non-spark training workloads"
+          subtitle="Cost of non-Spark workloads"
           icon={DollarSign}
           provenance={summary.summary.totalCostCents.provenance}
           empty={summaryEmpty}
@@ -326,7 +326,7 @@ export function TrainingEconomicsSection() {
         <CardHeader className="px-5 pt-5 pb-2">
           <CardTitle className="text-base">Financial benchmark</CardTitle>
           <CardDescription>
-            Non-spark training cost used for comparison with inference economics. Spark training is kept separate.
+            Managed fine-tune and inference workloads used for the financial benchmark. Spark training is kept separate.
           </CardDescription>
         </CardHeader>
         <CardContent className="px-5 pb-5 pt-2">
@@ -336,7 +336,7 @@ export function TrainingEconomicsSection() {
               <div className="mt-1 text-xl font-semibold tabular-nums">
                 {formatCents(summary.financialBenchmark.totalCostCents)}
               </div>
-              <div className="text-xs text-muted-foreground">Excludes spark training</div>
+              <div className="text-xs text-muted-foreground">Managed fine-tune and inference</div>
             </div>
             <div className="border border-border p-3">
               <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Spark training</div>
@@ -347,7 +347,7 @@ export function TrainingEconomicsSection() {
             </div>
             <div className="border border-border p-3">
               <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Scope</div>
-              <div className="mt-1 text-sm font-medium">Managed fine-tune v1</div>
+              <div className="mt-1 text-sm font-medium">Managed fine-tune and inference</div>
               <div className="text-xs text-muted-foreground">Guardrails preserved</div>
             </div>
           </div>
