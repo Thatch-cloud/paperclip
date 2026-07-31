@@ -2206,6 +2206,32 @@ export function issueRoutes(
     return false;
   }
 
+  async function actorCanBypassIssueMutationForRecoveryAction(
+    req: Request,
+    issue: { id: string; companyId: string; assigneeAgentId: string | null },
+    activeRecoveryAction: Awaited<ReturnType<typeof recoveryActionsSvc.getActiveForIssue>>,
+  ): Promise<boolean> {
+    if (req.actor.type !== "agent") return false;
+    if (!activeRecoveryAction) return false;
+    const actorAgentId = req.actor.agentId;
+    if (!actorAgentId) return false;
+    // Source assignees must continue to use the normal source-issue mutation
+    // path (including checkout lock and run-id checks).
+    if (issue.assigneeAgentId === actorAgentId) return false;
+    if (activeRecoveryAction.ownerAgentId === actorAgentId) return true;
+    if (
+      activeRecoveryAction.ownerAgentId &&
+      (await hasActiveCheckoutManagementOverride(
+        actorAgentId,
+        issue.companyId,
+        activeRecoveryAction.ownerAgentId,
+      ))
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   async function resolveActiveIssueRun(issue: {
     id: string;
     assigneeAgentId: string | null;
@@ -2969,8 +2995,13 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, existing.companyId);
-    if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
     const activeRecoveryAction = await recoveryActionsSvc.getActiveForIssue(existing.companyId, existing.id);
+    const recoveryOwnerBypass = await actorCanBypassIssueMutationForRecoveryAction(
+      req,
+      existing,
+      activeRecoveryAction,
+    );
+    if (!recoveryOwnerBypass && !(await assertAgentIssueMutationAllowed(req, res, existing))) return;
     if (
       !(await assertRecoveryActionAuthority(
         req,
