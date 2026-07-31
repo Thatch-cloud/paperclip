@@ -743,6 +743,13 @@
       "when": 1784201000000,
       "tag": "0105_agent_api_key_scopes_expiry",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1784203000000,
+      "tag": "0107_training_economics_metrics",
+      "breakpoints": true
     }
   ]
 }

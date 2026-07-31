@@ -447,6 +447,17 @@ export type {
 } from "./heartbeat.js";
 export type { LiveEvent } from "./live.js";
 export type { DashboardRunActivityDay, DashboardSummary } from "./dashboard.js";
+export type {
+  TrainingEconomicsProvenance,
+  TrainingEconomicsWorkloadType,
+  TrainingEconomicsFlipRecommendation,
+  TrainingEconomicsProvenancedValue,
+  TrainingEconomicsLaneMargin,
+  TrainingEconomicsNodeUtilization,
+  TrainingEconomicsTrainVsInference,
+  TrainingEconomicsFinancialBenchmark,
+  TrainingEconomicsSummary,
+} from "./training-economics.js";
 export type { ActivityEvent } from "./activity.js";
 export type {
   UserProfileActivitySummary,
