@@ -1708,5 +1708,6 @@ export const storybookTrainingEconomicsSummary: TrainingEconomicsSummary = {
     totalCostCents: 487_500,
     excludesSparkTraining: true,
     sparkTrainingCostCents: 23_400,
+    provenance: "measured",
   },
 };
