@@ -37,6 +37,7 @@ import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
 import { ProviderQuotaCard } from "../components/ProviderQuotaCard";
+import { TrainingEconomicsSection } from "../components/TrainingEconomicsSection";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
@@ -233,7 +234,7 @@ export function Costs() {
   const queryClient = useQueryClient();
 
   const [mainTab, setMainTab] = useState<
-    "overview" | "budgets" | "providers" | "billers" | "finance"
+    "overview" | "budgets" | "providers" | "billers" | "finance" | "training"
   >("overview");
   const [activeProvider, setActiveProvider] = useState("all");
   const [activeBiller, setActiveBiller] = useState("all");
@@ -855,6 +856,7 @@ export function Costs() {
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="billers">Billers</TabsTrigger>
           <TabsTrigger value="finance">Finance</TabsTrigger>
+          <TabsTrigger value="training">Training</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -1499,6 +1501,10 @@ export function Costs() {
               </div>
             </>
           )}
+        </TabsContent>
+
+        <TabsContent value="training" className="mt-4 space-y-4">
+          <TrainingEconomicsSection />
         </TabsContent>
       </Tabs>
     </div>

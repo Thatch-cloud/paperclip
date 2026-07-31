@@ -19,6 +19,7 @@ import type {
   SecretProviderConfigDiscoveryPreviewResult,
   SecretProviderDescriptor,
   SidebarBadges,
+  TrainingEconomicsSummary,
   WorkspaceRuntimeService,
 } from "@paperclipai/shared";
 import type { RunForIssue } from "@/api/activity";
@@ -1636,4 +1637,76 @@ export const storybookSecretProviderHealth = {
       backupGuidance: [],
     },
   ],
+};
+
+export const storybookTrainingEconomicsSummary: TrainingEconomicsSummary = {
+  companyId: "company-storybook",
+  period: {
+    start: new Date("2026-04-01T00:00:00.000Z").toISOString(),
+    end: new Date("2026-04-30T23:59:59.000Z").toISOString(),
+  },
+  summary: {
+    unitHours: { value: 1240.5, provenance: "measured" },
+    totalCostCents: { value: 487_500, provenance: "measured" },
+    totalRevenueCents: { value: 620_000, provenance: "measured" },
+    marginCents: { value: 132_500, provenance: "measured" },
+    marginPercent: { value: 21.37, provenance: "measured" },
+  },
+  marginsByLane: [
+    {
+      laneId: "finetune-vision-v1",
+      costCents: 210_000,
+      revenueCents: 280_000,
+      marginCents: 70_000,
+      marginPercent: 25.0,
+      provenance: "measured",
+    },
+    {
+      laneId: "finetune-embeddings-v1",
+      costCents: 95_000,
+      revenueCents: 110_000,
+      marginCents: 15_000,
+      marginPercent: 13.64,
+      provenance: "measured",
+    },
+    {
+      laneId: "inference-serving-v1",
+      costCents: 182_500,
+      revenueCents: 230_000,
+      marginCents: 47_500,
+      marginPercent: 20.65,
+      provenance: "modelled",
+    },
+  ],
+  nodeUtilization: [
+    {
+      nodeConfigId: "gpu-a100-40gb-8x",
+      nodeId: "node-a100-1",
+      utilizationPercent: 78.25,
+      provenance: "measured",
+    },
+    {
+      nodeConfigId: "gpu-a100-40gb-8x",
+      nodeId: "node-a100-2",
+      utilizationPercent: 61.5,
+      provenance: "measured",
+    },
+    {
+      nodeConfigId: "gpu-h100-80gb-4x",
+      nodeId: "node-h100-1",
+      utilizationPercent: 44.0,
+      provenance: "modelled",
+    },
+  ],
+  trainVsInference: {
+    recommendation: "train",
+    trainUnitHours: 820.0,
+    inferenceUnitHours: 420.5,
+    provenance: "measured",
+  },
+  financialBenchmark: {
+    totalCostCents: 487_500,
+    excludesSparkTraining: true,
+    sparkTrainingCostCents: 23_400,
+  },
 };

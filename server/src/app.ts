@@ -47,6 +47,7 @@ import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
+import { trainingEconomicsRoutes } from "./routes/training-economics.js";
 import { readBrandedStaticIndexHtml } from "./static-index-html.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
@@ -336,6 +337,7 @@ export async function createApp(
       keyManagementDb: opts.agentKeyManagementDb,
     }),
   );
+  api.use(trainingEconomicsRoutes(db));
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });

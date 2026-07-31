@@ -28,6 +28,7 @@ import {
   storybookSecretProviders,
   storybookSecrets,
   storybookSidebarBadges,
+  storybookTrainingEconomicsSummary,
 } from "../fixtures/paperclipData";
 import "@mdxeditor/editor/style.css";
 import "./tailwind-entry.css";
@@ -265,6 +266,15 @@ function installStorybookApiFixtures() {
               )
             : issues,
         );
+      }
+      if (resource === "training-economics") {
+        return Response.json({
+          ...storybookTrainingEconomicsSummary,
+          companyId,
+        });
+      }
+      if (resource === "routines" || resource === "skills") {
+        return Response.json([]);
       }
     }
 
