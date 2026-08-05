@@ -13,9 +13,9 @@ const COMMAND_ENV_SECRET_ASSIGNMENT_RE = new RegExp(
 );
 const COMMAND_AUTHORIZATION_BEARER_RE = /(\bAuthorization\s*:\s*Bearer\s+)[^\s"'`]+/gi;
 const COMMAND_OPENAI_KEY_RE = /\bsk-[A-Za-z0-9_-]{12,}\b/g;
-const COMMAND_GITHUB_TOKEN_RE = /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g;
-const COMMAND_JWT_RE =
-  /\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,})?\b/g;
+const COMMAND_GITHUB_TOKEN_RE = /gh[pousr]_[A-Za-z0-9_]{20,}\b/g;
+const COMMAND_GITHUB_FINE_GRAINED_TOKEN_RE = /github_pat_[A-Za-z0-9_]+\b/g;
+const COMMAND_JWT_RE = /eyJ[A-Za-z0-9_+/=]+\.[A-Za-z0-9_+/=]+\.[A-Za-z0-9_+/=]+(?:\.[A-Za-z0-9_+/=]+)?\b/g;
 const COMMAND_URL_CREDENTIALS_RE = /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^\s/@:]+):([^\s/@]+)@/g;
 const COMMAND_SECRET_HINTS = [
   "api",
@@ -37,6 +37,7 @@ const COMMAND_SECRET_HINTS = [
   "ghu_",
   "ghs_",
   "ghr_",
+  "github_pat",
 ] as const;
 
 function maybeContainsSecretText(command: string) {
@@ -56,6 +57,7 @@ export function redactCommandText(command: string, redactedValue = REDACTED_COMM
     )
     .replace(COMMAND_OPENAI_KEY_RE, redactedValue)
     .replace(COMMAND_GITHUB_TOKEN_RE, redactedValue)
+    .replace(COMMAND_GITHUB_FINE_GRAINED_TOKEN_RE, redactedValue)
     .replace(COMMAND_JWT_RE, redactedValue)
     .replace(COMMAND_URL_CREDENTIALS_RE, `$1${redactedValue}@`);
 }

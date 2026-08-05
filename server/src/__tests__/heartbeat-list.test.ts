@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { agents, companies, createDb, heartbeatRuns } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
+import { agents, companies, createDb, heartbeatRunEvents, heartbeatRuns } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
 import { boundHeartbeatRunEventPayloadForStorage, heartbeatService } from "../services/heartbeat.ts";
+import { REDACTED_EVENT_VALUE } from "../redaction.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -200,6 +202,65 @@ describeEmbeddedPostgres("heartbeat list", () => {
     expect(typeof result?.stdout).toBe("string");
     expect((result?.stdout as string).length).toBeLessThan(oversizedStdout.length);
     expect(result).not.toHaveProperty("nestedHuge");
+  });
+
+  it("redacts secrets from resultJson when a run is cancelled", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const githubToken = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "CodexCoder",
+      role: "engineer",
+      status: "running",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      invocationSource: "assignment",
+      status: "running",
+      resultJson: {
+        summary: "leaked",
+        githubToken,
+        openAiKey: "sk-live-example",
+        safe: "keep-me",
+      },
+    });
+
+    const heartbeat = heartbeatService(db);
+    const cancelled = await heartbeat.cancelRun(runId, "Cancelled for redaction test", {
+      resultJson: {
+        bearer: "Authorization: Bearer live-bearer-token",
+        command: `curl -H "Authorization: Bearer ${githubToken}"`,
+      },
+    });
+
+    await db.delete(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, runId));
+
+    const result = cancelled?.resultJson as Record<string, unknown> | null;
+    expect(result?.githubToken).toBe(REDACTED_EVENT_VALUE);
+    expect(result?.openAiKey).toBe(REDACTED_EVENT_VALUE);
+    expect(result?.safe).toBe("keep-me");
+    expect(result?.bearer).toContain(REDACTED_EVENT_VALUE);
+    expect(result?.bearer).not.toContain("live-bearer-token");
+    expect(result?.command).toContain(REDACTED_EVENT_VALUE);
+    expect(result?.command).not.toContain(githubToken);
   });
 });
 

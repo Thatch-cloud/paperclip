@@ -4645,9 +4645,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     status: string,
     patch?: Partial<typeof heartbeatRuns.$inferInsert>,
   ) {
+    let effectivePatch = patch;
+    if (effectivePatch && "resultJson" in effectivePatch && effectivePatch.resultJson !== undefined) {
+      effectivePatch = {
+        ...effectivePatch,
+        resultJson: redactEventPayload(parseObject(effectivePatch.resultJson)),
+      };
+    }
     const updated = await db
       .update(heartbeatRuns)
-      .set({ status, ...patch, updatedAt: new Date() })
+      .set({ status, ...effectivePatch, updatedAt: new Date() })
       .where(eq(heartbeatRuns.id, runId))
       .returning()
       .then((rows) => rows[0] ?? null);

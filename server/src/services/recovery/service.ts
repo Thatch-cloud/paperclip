@@ -30,7 +30,7 @@ import { forbidden, notFound } from "../../errors.js";
 import { logger } from "../../middleware/logger.js";
 import { isPidAlive, isProcessGroupAlive, terminateLocalService } from "../local-service-supervisor.js";
 import { redactCurrentUserText } from "../../log-redaction.js";
-import { redactSensitiveText } from "../../redaction.js";
+import { redactEventPayload, redactSensitiveText } from "../../redaction.js";
 import { logActivity } from "../activity-log.js";
 import { budgetService } from "../budgets.js";
 import { instanceSettingsService } from "../instance-settings.js";
@@ -1207,7 +1207,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     if (!input.evidence) return { kind: "skipped" as const };
     const cleanup = await cleanupSourceResolvedRunProcess({ run: input.run, runningAgent: input.runningAgent });
     const finalRunStatus = input.sourceIssue.status === "cancelled" ? "cancelled" : "succeeded";
-    const resultJson = {
+    const baseResultJson = {
       ...parseObject(input.run.resultJson),
       sourceResolvedWatchdogFold: {
         sourceIssueId: input.sourceIssue.id,
@@ -1223,6 +1223,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         cleanup,
       },
     };
+    const resultJson = redactEventPayload(baseResultJson) ?? baseResultJson;
     const finalizedRun = await db.transaction(async (tx) => {
       const [updatedRun] = await tx
         .update(heartbeatRuns)
@@ -1309,7 +1310,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     await appendRecoveryRunEvent(finalizedRun, {
       level: cleanup.outcome === "failed" ? "warn" : "info",
       message: "Source-resolved watchdog fold finalized stale active run",
-      payload: resultJson.sourceResolvedWatchdogFold,
+      payload: resultJson.sourceResolvedWatchdogFold as Record<string, unknown>,
     });
     await logActivity(db, {
       companyId: input.run.companyId,

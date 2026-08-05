@@ -67,6 +67,7 @@ describe("redaction", () => {
   it("redacts common secret shapes from unstructured text", () => {
     const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
     const githubToken = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+    const githubPat = "github_pat_1234567890abcdefghijklmnopqrstuvwxyz1234567890123";
     const input = [
       "Authorization: Bearer live-bearer-token-value",
       `payload {"apiKey":"json-secret-value"}`,
@@ -74,6 +75,7 @@ describe("redaction", () => {
       `escaped {\\"apiKey\\":\\"escaped-json-secret\\"}`,
       `export PAPERCLIP_API_KEY='paperclip-shell-secret'`,
       `GITHUB_TOKEN=${githubToken}`,
+      `FINE_GRAINED_PAT=${githubPat}`,
       `session=${jwt}`,
     ].join("\n");
 
@@ -86,7 +88,30 @@ describe("redaction", () => {
     expect(result).not.toContain("escaped-json-secret");
     expect(result).not.toContain("paperclip-shell-secret");
     expect(result).not.toContain(githubToken);
+    expect(result).not.toContain(githubPat);
     expect(result).not.toContain(jwt);
+  });
+
+  it("redacts fine-grained GitHub PATs from arbitrary object values", () => {
+    const githubPat = "github_pat_1234567890abcdefghijklmnopqrstuvwxyz1234567890123";
+    const result = sanitizeRecord({ note: `Use ${githubPat} for API access` });
+
+    expect(result.note).toContain(REDACTED_EVENT_VALUE);
+    expect(result.note).not.toContain(githubPat);
+  });
+
+  it("redacts GitHub PATs and JWTs when preceded by a literal backslash-newline", () => {
+    const githubPat = "github_pat_1234567890abcdefghijklmnopqrstuvwxyz1234567890123";
+    const githubToken = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+    const input = `execution_review_requested\\n${githubPat}\\n${githubToken}\\n${jwt}`;
+
+    const result = redactSensitiveText(input);
+
+    expect(result).not.toContain(githubPat);
+    expect(result).not.toContain(githubToken);
+    expect(result).not.toContain(jwt);
+    expect(result).toContain(REDACTED_EVENT_VALUE);
   });
 
   it("redacts connection URL credentials and seed passwords from env output", () => {
