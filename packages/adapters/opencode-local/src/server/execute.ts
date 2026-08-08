@@ -148,6 +148,18 @@ function isAttemptProviderExhaustionFailure(attempt: {
   return false;
 }
 
+// True when the inactivity monitor fired and the assistant turn never completed.
+// A hung provider emits no exhaustion signal (no error JSON, exitCode remains
+// null after SIGTERM), so `isAttemptProviderExhaustionFailure` returns false —
+// but failover is equally appropriate since the lane is unresponsive. This is
+// the THA-6649 fix: treat a hung lane as a first-class failover trigger.
+function isAttemptHangFailure(attempt: {
+  proc: { stdout: string };
+  monitor?: { fired: boolean };
+}): boolean {
+  return attempt.monitor?.fired === true && !hasOpenCodeCompletedTurn(attempt.proc.stdout);
+}
+
 const REMOTE_OPENCODE_MODELS_PROBE_DEFAULT_TIMEOUT_SEC = 20;
 const REMOTE_OPENCODE_MODELS_PROBE_SANDBOX_TIMEOUT_SEC = 120;
 
@@ -908,11 +920,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     try {
       const initial = await runAttempt(sessionId, model);
+      // THA-6649: a hung primary (inactivity monitor fired, turn not complete)
+      // must also count as failed so the failover block below can run.
+      const initialHung = isAttemptHangFailure(initial);
       const initialFailed =
-        !initial.proc.timedOut && ((initial.proc.exitCode ?? 0) !== 0 || Boolean(initial.parsed.errorMessage));
+        initialHung ||
+        (!initial.proc.timedOut && ((initial.proc.exitCode ?? 0) !== 0 || Boolean(initial.parsed.errorMessage)));
       if (
         sessionId &&
         initialFailed &&
+        !initialHung &&
         isOpenCodeUnknownSessionError(initial.proc.stdout, initial.rawStderr)
       ) {
         await onLog(
@@ -924,27 +941,34 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       }
 
       // Cross-provider failover: when the primary model hit a provider-exhaustion
-      // class error (usage/rate/overload/connection) and an ordered fallback
-      // model list is configured, re-run on the next already-authed provider.
-      // Modeled on the missing-session retry above. Failover always starts a
-      // FRESH session (a different provider cannot resume the primary's session)
-      // and forces clearSession so the next heartbeat does not attempt a
-      // cross-provider resume. THA-386 attribution is automatic: toResult
-      // attributes provider/biller/model from the model that actually served.
-      if (initialFailed && isAttemptProviderExhaustionFailure(initial) && fallbackModels.length > 0) {
+      // class error (usage/rate/overload/connection) OR hung (inactivity monitor
+      // fired, THA-6649), and an ordered fallback model list is configured,
+      // re-run on the next already-authed provider. Modeled on the missing-session
+      // retry above. Failover always starts a FRESH session (a different provider
+      // cannot resume the primary's session) and forces clearSession so the next
+      // heartbeat does not attempt a cross-provider resume. THA-386 attribution
+      // is automatic: toResult attributes provider/biller/model from the model
+      // that actually served.
+      if (initialFailed && (isAttemptProviderExhaustionFailure(initial) || initialHung) && fallbackModels.length > 0) {
         let failoverAttempt = initial;
         let failoverModel = model;
+        let currentFailureIsHang = initialHung;
         for (const candidateModel of fallbackModels) {
+          const reasonLabel = currentFailureIsHang
+            ? "hung (inactivity monitor fired)"
+            : "hit a provider-exhaustion error";
           await onLog(
             "stdout",
-            `[paperclip] OpenCode model "${failoverModel}" hit a provider-exhaustion error; failing over to "${candidateModel}".\n`,
+            `[paperclip] OpenCode model "${failoverModel}" ${reasonLabel}; failing over to "${candidateModel}".\n`,
           );
           const candidate = await runAttempt(null, candidateModel);
           failoverAttempt = candidate;
           failoverModel = candidateModel;
+          const candidateHung = isAttemptHangFailure(candidate);
           const candidateFailed =
-            !candidate.proc.timedOut &&
-            ((candidate.proc.exitCode ?? 0) !== 0 || Boolean(candidate.parsed.errorMessage));
+            candidateHung ||
+            (!candidate.proc.timedOut &&
+              ((candidate.proc.exitCode ?? 0) !== 0 || Boolean(candidate.parsed.errorMessage)));
           if (!candidateFailed) {
             await onLog(
               "stdout",
@@ -952,14 +976,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             );
             break;
           }
-          if (isAttemptProviderExhaustionFailure(candidate)) {
+          if (isAttemptProviderExhaustionFailure(candidate) || candidateHung) {
+            currentFailureIsHang = candidateHung;
+            const candidateReasonLabel = candidateHung ? "hung" : "hit a provider-exhaustion error";
             await onLog(
               "stdout",
-              `[paperclip] OpenCode fallback "${candidateModel}" also hit a provider-exhaustion error; continuing to next fallback.\n`,
+              `[paperclip] OpenCode fallback "${candidateModel}" also ${candidateReasonLabel}; continuing to next fallback.\n`,
             );
             continue;
           }
-          // Non-exhaustion failure on the fallback: stop failing over and surface it.
+          // Non-exhaustion, non-hang failure on the fallback: stop failing over and surface it.
           break;
         }
         const result = toResult(failoverAttempt, failoverModel, true);
