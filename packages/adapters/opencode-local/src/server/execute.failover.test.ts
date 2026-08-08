@@ -8,6 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // live provider accounts (exhausting the live account re-creates the THA-396
 // fleet outage). They assert the run completes on the fallback and attributes
 // provider/biller/model to the serving provider (THA-386 reconciliation).
+//
+// THA-6649: extends coverage to hung primary lanes. A hung lane emits no
+// exhaustion signal — the inactivity monitor fires and kills the process, leaving
+// exitCode=null and no error JSON. The hang failover tests use fake timers to
+// fire the inactivity monitor while the primary "process" is still running.
 
 const PRIMARY = "zai-coding-plan/glm-5.2";
 const FALLBACK = "kimi-for-coding/kimi-k2";
@@ -104,6 +109,7 @@ describe("opencode-local cross-provider failover (THA-422)", () => {
   function buildCtx(overrides: {
     fallbackModels?: string[];
     model?: string;
+    outputInactivityTimeoutMs?: number;
   }): AdapterExecutionContext {
     return {
       runId: "run-failover-1",
@@ -119,6 +125,9 @@ describe("opencode-local cross-provider failover (THA-422)", () => {
         command: "opencode",
         model: overrides.model ?? PRIMARY,
         ...(overrides.fallbackModels ? { fallbackModels: overrides.fallbackModels } : {}),
+        ...(overrides.outputInactivityTimeoutMs != null
+          ? { outputInactivityTimeoutMs: overrides.outputInactivityTimeoutMs }
+          : {}),
         // Avoid the runtime-config fs dance; not relevant to failover behaviour.
         dangerouslySkipPermissions: false,
         cwd: path.join(os.tmpdir(), "paperclip-failover-test"),
@@ -198,6 +207,87 @@ describe("opencode-local cross-provider failover (THA-422)", () => {
     // Only the primary was tried; the non-exhaustion error is surfaced directly.
     expect(runChildProcess).toHaveBeenCalledTimes(1);
     expect(result.exitCode).toBe(1);
+    expect(result.model).toBe(PRIMARY);
+  });
+
+  // THA-6649: hang failover — the inactivity monitor fires, primary emits no
+  // output and no error JSON. Without this fix, initialFailed=false and the
+  // failover block is skipped entirely; the run dies with an inactivity error.
+  //
+  // We use vi.useFakeTimers() and advance the clock from *inside* the primary
+  // runChildProcess mock. That way the timer is already registered (the monitor
+  // is set up inside runAttempt before runChildProcess is called), and advancing
+  // fake time fires the inactivity callback immediately — setting monitorFired=true
+  // before the mock returns, which is all the fix needs.
+  it("fails over to the fallback when the primary model hangs (inactivity monitor fires)", async () => {
+    vi.useFakeTimers();
+    const logs: string[] = [];
+
+    runChildProcess.mockImplementationOnce(async (_runId: string, _command: string, args: string[]) => {
+      if (Array.isArray(args) && args.includes("run")) {
+        // Advance past the inactivity timeout so the monitor fires (sets monitorFired=true).
+        // The monitor is already registered at this point (runAttempt sets it up before
+        // calling runChildProcess). killTarget is null (mock never calls onSpawn), so the
+        // signal path is a no-op — only monitorFired=true matters for the fix.
+        await vi.advanceTimersByTimeAsync(200);
+        // Return what a SIGTERM-killed process looks like: null exitCode, no stdout.
+        // Cast required: a SIGTERM-killed process has exitCode:null and a string signal,
+        // which doesn't match the mock's narrow generic return type.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return { exitCode: null, signal: "SIGTERM", timedOut: false, stdout: "", stderr: "", pid: 11, startedAt: new Date().toISOString() } as any;
+      }
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "", pid: 1, startedAt: new Date().toISOString() };
+    });
+
+    const ctx = buildCtx({ fallbackModels: [FALLBACK], outputInactivityTimeoutMs: 100 });
+    ctx.onLog = async (_stream, chunk) => { logs.push(chunk); };
+
+    const result = await execute(ctx);
+    vi.useRealTimers();
+
+    // Failover completed on the fallback.
+    expect(result.exitCode).toBe(0);
+    expect(result.errorMessage).toBeNull();
+    expect(result.summary).toBe("ok");
+
+    // Attribution reflects the FALLBACK, not the hung primary.
+    expect(result.model).toBe(FALLBACK);
+    expect(result.provider).toBe("kimi-for-coding");
+
+    // Session must be cleared so the next heartbeat doesn't try to resume on the primary.
+    expect(result.clearSession).toBe(true);
+
+    // Two run calls: primary (hung) + fallback (fresh).
+    const runCalls = runChildProcess.mock.calls.filter((call) => Array.isArray(call[2]) && call[2].includes("run"));
+    expect(runCalls).toHaveLength(2);
+    expect(modelUsedInCall(runCalls[0]?.[2])).toBe(PRIMARY);
+    expect(modelUsedInCall(runCalls[1]?.[2])).toBe(FALLBACK);
+
+    // Failover reason logged as "hung", not "provider-exhaustion".
+    expect(logs.some((line) => /hung/.test(line) && /failing over to/.test(line) && line.includes(FALLBACK))).toBe(true);
+    expect(logs.some((line) => /failover succeeded/.test(line))).toBe(true);
+  });
+
+  it("does not fail over on a hang when no fallbackModels are configured", async () => {
+    vi.useFakeTimers();
+
+    runChildProcess.mockImplementationOnce(async (_runId: string, _command: string, args: string[]) => {
+      if (Array.isArray(args) && args.includes("run")) {
+        await vi.advanceTimersByTimeAsync(200);
+        // Cast required: a SIGTERM-killed process has exitCode:null and a string signal,
+        // which doesn't match the mock's narrow generic return type.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return { exitCode: null, signal: "SIGTERM", timedOut: false, stdout: "", stderr: "", pid: 11, startedAt: new Date().toISOString() } as any;
+      }
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "", pid: 1, startedAt: new Date().toISOString() };
+    });
+
+    const result = await execute(buildCtx({ outputInactivityTimeoutMs: 100 }));
+    vi.useRealTimers();
+
+    // Only one attempt; the inactivity error is surfaced directly.
+    expect(runChildProcess).toHaveBeenCalledTimes(1);
+    expect(result.errorCode).toBe("opencode_output_inactivity_monitor");
     expect(result.model).toBe(PRIMARY);
   });
 });
