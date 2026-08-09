@@ -4079,6 +4079,30 @@ registerCurrentRoute({
 });
 
 registerCurrentRoute({
+  method: "post",
+  path: "/api/companies/{companyId}/fine-tunes",
+  tags: ["fine-tune"],
+  summary: "Submit a fine-tune job",
+  responses: { 202: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 422: r.unprocessable },
+});
+
+registerCurrentRoute({
+  method: "post",
+  path: "/api/companies/{companyId}/fine-tunes/flip-evaluation",
+  tags: ["fine-tune"],
+  summary: "Evaluate a fine-tune flip-evaluation request",
+  responses: { 200: r.ok(), 400: r.badRequest, 401: r.unauthorized, 422: r.unprocessable },
+});
+
+registerCurrentRoute({
+  method: "get",
+  path: "/api/companies/{companyId}/fine-tunes/{jobId}",
+  tags: ["fine-tune"],
+  summary: "Get a fine-tune job",
+  responses: { 200: r.ok(), 401: r.unauthorized, 404: r.notFound },
+});
+
+registerCurrentRoute({
   method: "get",
   path: "/api/board-api-keys",
   tags: ["access"],
