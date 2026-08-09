@@ -761,6 +761,26 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "post",
+  path: "/api/health/write-canary",
+  tags: ["health"],
+  summary: "Run issue-create write canary",
+  request: {
+    query: z.object({ companyId: z.string().min(1) }),
+  },
+  responses: {
+    200: r.ok(z.object({
+      status: z.literal("ok"),
+      canary: z.literal("issue_create"),
+      issueId: z.string(),
+      identifier: z.string().nullable(),
+    })),
+    400: r.badRequest,
+    503: { description: "Issue-create write canary failed", content: { "application/json": { schema: ErrorSchema } } },
+  },
+});
+
+registry.registerPath({
   method: "get",
   path: "/api/openapi.json",
   tags: ["health"],
