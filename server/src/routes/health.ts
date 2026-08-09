@@ -128,6 +128,34 @@ export function healthRoutes(
       return;
     }
 
+    try {
+      await db.execute(sql`
+        INSERT INTO health_write_canaries (singleton_key, last_seen_at)
+        VALUES ('live_health', now())
+        ON CONFLICT (singleton_key) DO UPDATE
+          SET last_seen_at = excluded.last_seen_at
+      `);
+    } catch (error) {
+      logger.warn({ err: error }, "Health check database write canary failed");
+      if (!exposeFullDetails) {
+        res.status(503).json({
+          status: "unhealthy",
+          deploymentMode: opts.deploymentMode,
+          deploymentExposure: opts.deploymentExposure,
+          error: "database_write_unavailable",
+        });
+        return;
+      }
+
+      res.status(503).json({
+        status: "unhealthy",
+        version: serverVersion,
+        deployment: deploymentVersion,
+        error: "database_write_unavailable",
+      });
+      return;
+    }
+
     let bootstrapStatus: "ready" | "bootstrap_pending" = "ready";
     let bootstrapInviteActive = false;
     if (opts.deploymentMode === "authenticated") {
@@ -181,6 +209,7 @@ export function healthRoutes(
     if (!exposeFullDetails) {
       res.json({
         status: "ok",
+        writeCanary: "ok",
         deploymentMode: opts.deploymentMode,
         deploymentExposure: opts.deploymentExposure,
         bootstrapStatus,
@@ -192,6 +221,7 @@ export function healthRoutes(
 
     res.json({
       status: "ok",
+      writeCanary: "ok",
       version: serverVersion,
       deployment: deploymentVersion,
       deploymentMode: opts.deploymentMode,

@@ -87,8 +87,34 @@ describe("GET /health", () => {
     const res = await request(app).get("/health");
 
     expect(res.status).toBe(200);
-    expect(db.execute).toHaveBeenCalledTimes(1);
-    expect(res.body).toMatchObject({ status: "ok", version: serverVersion });
+    expect(db.execute).toHaveBeenCalledTimes(2);
+    expect(res.body).toMatchObject({
+      status: "ok",
+      writeCanary: "ok",
+      version: serverVersion,
+    });
+  });
+
+  it("returns 503 when the database write canary fails", async () => {
+    const db = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce([{ "?column?": 1 }])
+        .mockRejectedValueOnce(
+          new Error("cannot execute INSERT in a read-only transaction"),
+        ),
+    } as unknown as Db;
+    const app = createApp(db);
+
+    const res = await request(app).get("/health");
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      status: "unhealthy",
+      version: serverVersion,
+      deployment: deploymentVersion,
+      error: "database_write_unavailable",
+    });
   });
 
   it("returns 503 when the database probe fails", async () => {
@@ -195,6 +221,7 @@ describe("GET /health", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       status: "ok",
+      writeCanary: "ok",
       deploymentMode: "authenticated",
       deploymentExposure: "public",
       bootstrapStatus: "ready",
@@ -232,6 +259,7 @@ describe("GET /health", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       status: "ok",
+      writeCanary: "ok",
       deploymentMode: "authenticated",
       deploymentExposure: "public",
       bootstrapStatus: "ready",
@@ -277,6 +305,7 @@ describe("GET /health", () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       status: "ok",
+      writeCanary: "ok",
       version: serverVersion,
       deployment: deploymentVersion,
       deploymentMode: "authenticated",
