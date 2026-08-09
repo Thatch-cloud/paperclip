@@ -743,6 +743,13 @@
       "when": 1784201000000,
       "tag": "0105_agent_api_key_scopes_expiry",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1784202000000,
+      "tag": "0106_health_write_canary",
+      "breakpoints": true
     }
   ]
 }

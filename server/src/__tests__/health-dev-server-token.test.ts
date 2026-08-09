@@ -95,6 +95,7 @@ describe("GET /health dev-server supervisor access", () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
         status: "ok",
+        writeCanary: "ok",
         deploymentMode: "authenticated",
         deploymentExposure: "private",
         bootstrapStatus: "ready",
