@@ -5606,3 +5606,95 @@ describeEmbeddedPostgres("issueService.assertCheckoutOwner stale checkout adopti
   });
 
 });
+
+describeEmbeddedPostgres("issueService.create identifier allocator robustness", () => {
+  let db!: ReturnType<typeof createDb>;
+  let svc!: ReturnType<typeof issueService>;
+  let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
+
+  beforeAll(async () => {
+    tempDb = await startEmbeddedPostgresTestDatabase("paperclip-issues-alloc-");
+    db = createDb(tempDb.connectionString);
+    svc = issueService(db);
+    await ensureIssueRelationsTable(db);
+  }, 20_000);
+
+  afterEach(async () => {
+    await db.delete(issueComments);
+    await db.delete(issueRelations);
+    await db.delete(issueInboxArchives);
+    await db.delete(activityLog);
+    await db.delete(issues);
+    await db.delete(instanceSettings);
+    await db.delete(companies);
+  });
+
+  afterAll(async () => {
+    await tempDb?.cleanup();
+  });
+
+  it("does not collide when existing rows have NULL issue_number but valid identifiers", async () => {
+    const companyId = randomUUID();
+    const prefix = "THA";
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Thatch",
+      issuePrefix: prefix,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    // Simulate the bug: two issues created with identifiers but NULL issue_number,
+    // and the company counter at the pre-NULL value.
+    await db.insert(issues).values([
+      {
+        id: randomUUID(),
+        companyId,
+        issueNumber: 10,
+        identifier: `${prefix}-10`,
+        title: "Normal issue 10",
+        status: "done",
+        priority: "medium",
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        issueNumber: null,
+        identifier: `${prefix}-11`,
+        title: "NULL issue_number 11",
+        status: "todo",
+        priority: "medium",
+      },
+      {
+        id: randomUUID(),
+        companyId,
+        issueNumber: null,
+        identifier: `${prefix}-12`,
+        title: "NULL issue_number 12",
+        status: "todo",
+        priority: "medium",
+      },
+    ]);
+
+    await db.update(companies).set({ issueCounter: 10 }).where(eq(companies.id, companyId));
+
+    // Before the fix, the allocator computed currentMax = max(issue_number) = 10,
+    // so issueCounter = greatest(10, 10) + 1 = 11, and identifier = THA-11 — colliding
+    // with the existing row.  After the fix, currentMax also considers max(identifier
+    // numeric suffix) = 12, so issueCounter = greatest(10, 12) + 1 = 13, identifier = THA-13.
+    const created = await svc.create(companyId, {
+      title: "New issue after NULL-issue_number rows",
+    });
+
+    expect(created.identifier).toBe(`${prefix}-13`);
+    expect(created.issueNumber).toBe(13);
+
+    // A second create should also be collision-free.
+    const created2 = await svc.create(companyId, {
+      title: "Another new issue",
+    });
+
+    expect(created2.identifier).toBe(`${prefix}-14`);
+    expect(created2.issueNumber).toBe(14);
+  });
+});

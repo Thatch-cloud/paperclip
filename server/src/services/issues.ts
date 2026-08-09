@@ -5216,10 +5216,19 @@ export function issueService(db: Db) {
         if (executionWorkspaceId) {
           await assertValidExecutionWorkspace(companyId, issueData.projectId, executionWorkspaceId, tx);
         }
-        // Self-correcting counter: use MAX(issue_number) + 1 if the counter
-        // has drifted below the actual max, preventing identifier collisions.
+        // Self-correcting counter: use the greater of MAX(issue_number) and
+        // MAX(numeric suffix of identifier) + 1.  Considering the identifier
+        // column prevents stalls when rows have NULL issue_number but a valid
+        // identifier (e.g. issues created by a path that sets identifier but
+        // not issue_number).  Without this, the counter would compute a number
+        // that already exists as an identifier and collide on the unique index.
         const [maxRow] = await tx
-          .select({ maxNum: sql<number>`coalesce(max(${issues.issueNumber}), 0)` })
+          .select({
+            maxNum: sql<number>`greatest(
+              coalesce(max(${issues.issueNumber}), 0),
+              coalesce(max(substring(${issues.identifier} from '[0-9]+$')::int), 0)
+            )`,
+          })
           .from(issues)
           .where(eq(issues.companyId, companyId));
         const currentMax = maxRow?.maxNum ?? 0;
