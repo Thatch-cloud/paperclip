@@ -87,34 +87,8 @@ describe("GET /health", () => {
     const res = await request(app).get("/health");
 
     expect(res.status).toBe(200);
-    expect(db.execute).toHaveBeenCalledTimes(2);
-    expect(res.body).toMatchObject({
-      status: "ok",
-      writeCanary: "ok",
-      version: serverVersion,
-    });
-  });
-
-  it("returns 503 when the database write canary fails", async () => {
-    const db = {
-      execute: vi
-        .fn()
-        .mockResolvedValueOnce([{ "?column?": 1 }])
-        .mockRejectedValueOnce(
-          new Error("cannot execute INSERT in a read-only transaction"),
-        ),
-    } as unknown as Db;
-    const app = createApp(db);
-
-    const res = await request(app).get("/health");
-
-    expect(res.status).toBe(503);
-    expect(res.body).toEqual({
-      status: "unhealthy",
-      version: serverVersion,
-      deployment: deploymentVersion,
-      error: "database_write_unavailable",
-    });
+    expect(db.execute).toHaveBeenCalledTimes(1);
+    expect(res.body).toMatchObject({ status: "ok", version: serverVersion });
   });
 
   it("returns 503 when the database probe fails", async () => {
@@ -221,7 +195,6 @@ describe("GET /health", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       status: "ok",
-      writeCanary: "ok",
       deploymentMode: "authenticated",
       deploymentExposure: "public",
       bootstrapStatus: "ready",
@@ -259,7 +232,6 @@ describe("GET /health", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       status: "ok",
-      writeCanary: "ok",
       deploymentMode: "authenticated",
       deploymentExposure: "public",
       bootstrapStatus: "ready",
@@ -305,7 +277,6 @@ describe("GET /health", () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       status: "ok",
-      writeCanary: "ok",
       version: serverVersion,
       deployment: deploymentVersion,
       deploymentMode: "authenticated",
@@ -316,6 +287,68 @@ describe("GET /health", () => {
       features: {
         companyDeletionEnabled: false,
       },
+    });
+  });
+});
+
+describe("POST /health/write-canary", () => {
+  it("exposes the issue-create write canary", async () => {
+    const issueCreateWriteCanary = vi.fn().mockResolvedValue({
+      id: "issue-1",
+      identifier: "THA-9999",
+    });
+    const app = express();
+    app.use(
+      "/health",
+      healthRoutes(undefined, {
+        deploymentMode: "local_trusted",
+        deploymentExposure: "private",
+        authReady: true,
+        companyDeletionEnabled: true,
+        issueCreateWriteCanary,
+      }),
+    );
+
+    const res = await request(app).post(
+      "/health/write-canary?companyId=company-1",
+    );
+
+    expect(res.status).toBe(200);
+    expect(issueCreateWriteCanary).toHaveBeenCalledWith("company-1");
+    expect(res.body).toEqual({
+      status: "ok",
+      canary: "issue_create",
+      issueId: "issue-1",
+      identifier: "THA-9999",
+    });
+  });
+
+  it("returns 503 when the issue-create write canary fails", async () => {
+    const issueCreateWriteCanary = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("duplicate key value violates unique constraint"),
+      );
+    const app = express();
+    app.use(
+      "/health",
+      healthRoutes(undefined, {
+        deploymentMode: "local_trusted",
+        deploymentExposure: "private",
+        authReady: true,
+        companyDeletionEnabled: true,
+        issueCreateWriteCanary,
+      }),
+    );
+
+    const res = await request(app).post(
+      "/health/write-canary?companyId=company-1",
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({
+      status: "unhealthy",
+      error: "issue_create_write_canary_failed",
     });
   });
 });
