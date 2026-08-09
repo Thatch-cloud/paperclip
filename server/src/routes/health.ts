@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { and, count, eq, gt, inArray, isNull, sql } from "drizzle-orm";
@@ -11,7 +11,13 @@ import {
 } from "../dev-server-status.js";
 import { logger } from "../middleware/logger.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
+import { issueService } from "../services/issues.js";
 import { deploymentVersion, serverVersion } from "../version.js";
+
+type IssueCreateWriteCanary = (companyId: string) => Promise<{
+  id: string;
+  identifier: string | null;
+}>;
 
 function shouldExposeFullHealthDetails(
   actorType: "none" | "board" | "agent" | null | undefined,
@@ -39,6 +45,7 @@ export function healthRoutes(
     deploymentExposure: DeploymentExposure;
     authReady: boolean;
     companyDeletionEnabled: boolean;
+    issueCreateWriteCanary?: IssueCreateWriteCanary;
   } = {
     deploymentMode: "local_trusted",
     deploymentExposure: "private",
@@ -47,6 +54,23 @@ export function healthRoutes(
   },
 ) {
   const router = Router();
+
+  const runIssueCreateWriteCanary: IssueCreateWriteCanary =
+    opts.issueCreateWriteCanary ??
+    (async (companyId) => {
+      if (!db) throw new Error("database_unavailable");
+      const issue = await issueService(db).create(companyId, {
+        title: "thatch-control-plane-canary@write-canary",
+        description:
+          "Cancelled health canary issue proving the live issue-create path accepts writes.",
+        status: "cancelled",
+        priority: "low",
+        originKind: "health_write_canary",
+        originId: "write-canary",
+        originFingerprint: randomUUID(),
+      });
+      return { id: issue.id, identifier: issue.identifier ?? null };
+    });
 
   router.post("/dev-server/restart", async (req, res) => {
     const actorType = "actor" in req ? req.actor?.type : null;
@@ -80,6 +104,44 @@ export function healthRoutes(
     }
 
     res.status(202).json({ status: "restart_requested" });
+  });
+
+  router.post("/write-canary", async (req, res) => {
+    const actorType = "actor" in req ? req.actor?.type : null;
+    if (
+      opts.deploymentMode === "authenticated" &&
+      actorType !== "board" &&
+      actorType !== "agent"
+    ) {
+      res.status(403).json({ error: "agent_or_board_access_required" });
+      return;
+    }
+
+    const companyId =
+      typeof req.query.companyId === "string" ? req.query.companyId.trim() : "";
+    if (!companyId) {
+      res.status(400).json({ error: "company_id_required" });
+      return;
+    }
+
+    try {
+      const issue = await runIssueCreateWriteCanary(companyId);
+      res.json({
+        status: "ok",
+        canary: "issue_create",
+        issueId: issue.id,
+        identifier: issue.identifier,
+      });
+    } catch (error) {
+      logger.warn(
+        { err: error, companyId },
+        "Issue-create write canary failed",
+      );
+      res.status(503).json({
+        status: "unhealthy",
+        error: "issue_create_write_canary_failed",
+      });
+    }
   });
 
   router.get("/", async (req, res) => {
@@ -124,34 +186,6 @@ export function healthRoutes(
         version: serverVersion,
         deployment: deploymentVersion,
         error: "database_unreachable",
-      });
-      return;
-    }
-
-    try {
-      await db.execute(sql`
-        INSERT INTO health_write_canaries (singleton_key, last_seen_at)
-        VALUES ('live_health', now())
-        ON CONFLICT (singleton_key) DO UPDATE
-          SET last_seen_at = excluded.last_seen_at
-      `);
-    } catch (error) {
-      logger.warn({ err: error }, "Health check database write canary failed");
-      if (!exposeFullDetails) {
-        res.status(503).json({
-          status: "unhealthy",
-          deploymentMode: opts.deploymentMode,
-          deploymentExposure: opts.deploymentExposure,
-          error: "database_write_unavailable",
-        });
-        return;
-      }
-
-      res.status(503).json({
-        status: "unhealthy",
-        version: serverVersion,
-        deployment: deploymentVersion,
-        error: "database_write_unavailable",
       });
       return;
     }
@@ -209,7 +243,6 @@ export function healthRoutes(
     if (!exposeFullDetails) {
       res.json({
         status: "ok",
-        writeCanary: "ok",
         deploymentMode: opts.deploymentMode,
         deploymentExposure: opts.deploymentExposure,
         bootstrapStatus,
@@ -221,7 +254,6 @@ export function healthRoutes(
 
     res.json({
       status: "ok",
-      writeCanary: "ok",
       version: serverVersion,
       deployment: deploymentVersion,
       deploymentMode: opts.deploymentMode,
